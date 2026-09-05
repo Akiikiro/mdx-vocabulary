@@ -1,0 +1,31 @@
+{
+  "name": "mdx-vocabulary",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "api": "tsx src/api.ts",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "worker": "tsx src/worker.ts",
+    "import-mdx": "tsx src/cli/import-mdx.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@fastify/swagger": "^9.8.1",
+    "@fastify/swagger-ui": "^6.1.1",
+    "@prisma/client": "6.19.2",
+    "dotenv": "16.6.1",
+    "fastify": "^5.12.3",
+    "js-mdict": "6.0.6",
+    "sanitize-html": "2.17.0"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "@types/sanitize-html": "2.16.0",
+    "prisma": "6.19.2",
+    "tsx": "4.21.0",
+    "typescript": "5.9.3",
+    "vitest": "4.0.9"
+  }
+}
