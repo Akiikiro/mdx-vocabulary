@@ -23,8 +23,8 @@ export interface EntryDetail extends SearchEntry {
 
 interface ApiErrorBody { error?: { message?: string } }
 
-async function getJson<T>(path: string): Promise<T> {
-  const response = await fetch(path);
+async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+  const response = await fetch(path, { signal });
   if (!response.ok) {
     let body: ApiErrorBody | null = null;
     try {
@@ -45,14 +45,21 @@ export async function searchEntries(
   dictionaryId: string,
   query: string,
   mode: 'exact' | 'prefix',
+  options: { limit?: number; offset?: number; signal?: AbortSignal } = {},
 ): Promise<SearchEntry[]> {
-  const parameters = new URLSearchParams({ q: query, mode, limit: '20', offset: '0' });
+  const parameters = new URLSearchParams({
+    q: query,
+    mode,
+    limit: String(options.limit ?? 20),
+    offset: String(options.offset ?? 0),
+  });
   const response = await getJson<{ items: SearchEntry[] }>(
     `/api/dictionaries/${encodeURIComponent(dictionaryId)}/search?${parameters}`,
+    options.signal,
   );
   return response.items;
 }
 
-export function getEntry(entryId: string): Promise<EntryDetail> {
-  return getJson<EntryDetail>(`/api/entries/${encodeURIComponent(entryId)}`);
+export function getEntry(entryId: string, signal?: AbortSignal): Promise<EntryDetail> {
+  return getJson<EntryDetail>(`/api/entries/${encodeURIComponent(entryId)}`, signal);
 }

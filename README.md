@@ -17,7 +17,7 @@
 - 根据 entry ID 获取词条详情。
 - Fastify 参数校验、统一错误响应和 OpenAPI schema。
 - Swagger UI 和 JSON/YAML OpenAPI 文档。
-- React 搜索页面：选择字典、exact/prefix 搜索、结果预览、完整词条展示。
+- React 搜索页面：选择字典、prefix autocomplete 候选、键盘选择和完整词条展示。
 - Importer、查询服务、HTTP API 的单元及 PostgreSQL integration tests。
 
 ## 架构
@@ -71,7 +71,7 @@ MDX
 | `src/http/server.ts` | Fastify 实例、REST routes、validation、error responses、Swagger。 |
 | `src/api.ts` | Fastify 进程启动和优雅关闭入口。 |
 | `web/src/api.ts` | 浏览器端相对路径 API client 和 DTO 类型。 |
-| `web/src/App.tsx` | 字典加载、搜索、结果和详情页面状态。 |
+| `web/src/App.tsx` | 字典加载、debounced autocomplete、候选选择和详情页面状态。 |
 | `web/src/styles.css` | 无 UI framework 的页面及词条基础样式。 |
 
 ## 环境要求
@@ -215,6 +215,8 @@ http://127.0.0.1:5173
 ```
 
 `web/vite.config.ts` 将 `/api` 转发到 `http://127.0.0.1:3000`。前端源代码始终请求相对 `/api/...` URL，不依赖固定 backend host 或 port。
+
+页面会在输入停止约 250ms 后通过现有 prefix API 获取最多 10 个候选词。点击候选，或使用方向键选择后按 Enter，会直接加载完整词条；Escape 可以关闭候选列表。
 
 生产前端 build：
 

@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useState } from 'react';
+import { type KeyboardEvent, useEffect, useRef, useState } from 'react';
 import {
   getEntry,
   listDictionaries,
@@ -8,20 +8,25 @@ import {
   type SearchEntry,
 } from './api';
 
-type SearchMode = 'exact' | 'prefix';
+const AUTOCOMPLETE_DELAY_MS = 250;
 
 export function App() {
   const [dictionaries, setDictionaries] = useState<Dictionary[]>([]);
   const [dictionaryId, setDictionaryId] = useState('');
   const [query, setQuery] = useState('');
-  const [mode, setMode] = useState<SearchMode>('exact');
-  const [results, setResults] = useState<SearchEntry[]>([]);
+  const [suggestions, setSuggestions] = useState<SearchEntry[]>([]);
   const [detail, setDetail] = useState<EntryDetail | null>(null);
   const [loadingDictionaries, setLoadingDictionaries] = useState(true);
   const [searching, setSearching] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
-  const [searchCompleted, setSearchCompleted] = useState(false);
+  const [autocompleteCompleted, setAutocompleteCompleted] = useState(false);
+  const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(-1);
   const [error, setError] = useState('');
+  const autocompleteController = useRef<AbortController | null>(null);
+  const detailController = useRef<AbortController | null>(null);
+  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const skipAutocompleteValue = useRef<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -40,48 +45,128 @@ export function App() {
     return () => { active = false; };
   }, []);
 
-  async function submitSearch(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const trimmedQuery = query.trim();
-    if (!dictionaryId || !trimmedQuery) return;
+  useEffect(() => {
+    autocompleteController.current?.abort();
+    if (debounceTimer.current) clearTimeout(debounceTimer.current);
 
-    setSearching(true);
-    setSearchCompleted(false);
-    setError('');
-    setDetail(null);
-    try {
-      const items = await searchEntries(dictionaryId, trimmedQuery, mode);
-      setResults(items);
-      setSearchCompleted(true);
-    } catch (reason) {
-      setResults([]);
-      setError(messageFrom(reason));
-    } finally {
+    if (skipAutocompleteValue.current === query) {
+      skipAutocompleteValue.current = null;
+      return;
+    }
+    skipAutocompleteValue.current = null;
+
+    const trimmedQuery = query.trim();
+    if (!dictionaryId || !trimmedQuery) {
+      setSuggestions([]);
       setSearching(false);
+      setAutocompleteCompleted(false);
+      setDropdownOpen(false);
+      setActiveIndex(-1);
+      return;
+    }
+
+    const controller = new AbortController();
+    autocompleteController.current = controller;
+    setSuggestions([]);
+    setAutocompleteCompleted(false);
+    setSearching(false);
+    setDropdownOpen(true);
+    setActiveIndex(-1);
+
+    debounceTimer.current = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const items = await searchEntries(dictionaryId, trimmedQuery, 'prefix', {
+          limit: 10,
+          offset: 0,
+          signal: controller.signal,
+        });
+        if (controller.signal.aborted) return;
+        const visibleSuggestions = prepareSuggestions(items);
+        setSuggestions(visibleSuggestions);
+        setActiveIndex(visibleSuggestions.length ? 0 : -1);
+        setAutocompleteCompleted(true);
+        setDropdownOpen(true);
+      } catch (reason) {
+        if (isAbortError(reason)) return;
+        setSuggestions([]);
+        setAutocompleteCompleted(true);
+        setError(messageFrom(reason));
+      } finally {
+        if (!controller.signal.aborted) setSearching(false);
+      }
+    }, AUTOCOMPLETE_DELAY_MS);
+
+    return () => {
+      if (debounceTimer.current) clearTimeout(debounceTimer.current);
+      controller.abort();
+    };
+  }, [dictionaryId, query]);
+
+  useEffect(() => () => {
+    autocompleteController.current?.abort();
+    detailController.current?.abort();
+  }, []);
+
+  async function selectEntry(entry: SearchEntry) {
+    autocompleteController.current?.abort();
+    if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    skipAutocompleteValue.current = entry.headword;
+    setQuery(entry.headword);
+    setSuggestions([]);
+    setDropdownOpen(false);
+    setAutocompleteCompleted(false);
+    setActiveIndex(-1);
+    setSearching(false);
+    setError('');
+
+    detailController.current?.abort();
+    const controller = new AbortController();
+    detailController.current = controller;
+    setLoadingDetail(true);
+    try {
+      const selectedDetail = await getEntry(entry.id, controller.signal);
+      if (!controller.signal.aborted) setDetail(selectedDetail);
+    } catch (reason) {
+      if (!isAbortError(reason)) {
+        setDetail(null);
+        setError(messageFrom(reason));
+      }
+    } finally {
+      if (!controller.signal.aborted) setLoadingDetail(false);
     }
   }
 
-  async function selectEntry(entryId: string) {
-    setLoadingDetail(true);
-    setError('');
-    try {
-      setDetail(await getEntry(entryId));
-    } catch (reason) {
-      setDetail(null);
-      setError(messageFrom(reason));
-    } finally {
-      setLoadingDetail(false);
+  function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === 'Escape') {
+      autocompleteController.current?.abort();
+      if (debounceTimer.current) clearTimeout(debounceTimer.current);
+      setDropdownOpen(false);
+      setSearching(false);
+      return;
+    }
+    if (!dropdownOpen || suggestions.length === 0) return;
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setActiveIndex((index) => (index + 1) % suggestions.length);
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setActiveIndex((index) => (index <= 0 ? suggestions.length - 1 : index - 1));
+    } else if (event.key === 'Enter' && activeIndex >= 0) {
+      event.preventDefault();
+      void selectEntry(suggestions[activeIndex]);
     }
   }
 
   const noDictionaries = !loadingDictionaries && dictionaries.length === 0;
+  const showDropdown = dropdownOpen && Boolean(query.trim()) && (searching || autocompleteCompleted);
 
   return (
     <main className="page-shell">
       <header className="page-header">
         <p className="eyebrow">MDX Vocabulary</p>
         <h1>Dictionary Search</h1>
-        <p>Search your imported dictionaries and read the complete entry.</p>
+        <p>Start typing a headword, then choose a suggestion to read the complete entry.</p>
       </header>
 
       <section className="search-panel" aria-labelledby="search-heading">
@@ -90,13 +175,13 @@ export function App() {
         {noDictionaries && <p className="empty-state">No ready dictionaries available.</p>}
 
         {!noDictionaries && (
-          <form onSubmit={submitSearch}>
+          <div className="search-fields">
             <label className="field dictionary-field">
               <span>Dictionary</span>
               <select
                 value={dictionaryId}
                 onChange={(event) => setDictionaryId(event.target.value)}
-                disabled={loadingDictionaries || searching}
+                disabled={loadingDictionaries}
               >
                 {dictionaries.map((dictionary) => (
                   <option key={dictionary.id} value={dictionary.id}>
@@ -106,68 +191,90 @@ export function App() {
               </select>
             </label>
 
-            <div className="search-row">
-              <label className="field query-field">
+            <div className="autocomplete">
+              <label className="field query-field" htmlFor="headword-search">
                 <span>Headword</span>
-                <input
-                  type="search"
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  placeholder="Try apple or app"
-                  autoComplete="off"
-                  autoFocus
-                />
               </label>
-              <fieldset className="mode-field">
-                <legend>Search mode</legend>
-                <label><input type="radio" name="mode" checked={mode === 'exact'} onChange={() => setMode('exact')} /> Exact</label>
-                <label><input type="radio" name="mode" checked={mode === 'prefix'} onChange={() => setMode('prefix')} /> Prefix</label>
-              </fieldset>
-              <button className="search-button" type="submit" disabled={!dictionaryId || !query.trim() || searching}>
-                {searching ? 'Searching…' : 'Search'}
-              </button>
+              <input
+                id="headword-search"
+                className="search-input"
+                type="search"
+                role="combobox"
+                aria-autocomplete="list"
+                aria-expanded={showDropdown}
+                aria-controls="autocomplete-results"
+                aria-activedescendant={activeIndex >= 0 ? `suggestion-${suggestions[activeIndex]?.id}` : undefined}
+                value={query}
+                onChange={(event) => {
+                  setQuery(event.target.value);
+                  setError('');
+                }}
+                onFocus={() => {
+                  if (query.trim() && (suggestions.length || autocompleteCompleted)) setDropdownOpen(true);
+                }}
+                onKeyDown={handleKeyDown}
+                placeholder="Start typing, for example app"
+                autoComplete="off"
+                autoFocus
+              />
+
+              {showDropdown && (
+                <div id="autocomplete-results" className="autocomplete-dropdown" role="listbox">
+                  {searching && <p className="dropdown-status">Searching…</p>}
+                  {!searching && autocompleteCompleted && suggestions.length === 0 && (
+                    <p className="dropdown-status">No matching entries</p>
+                  )}
+                  {!searching && suggestions.map((entry, index) => (
+                    <button
+                      id={`suggestion-${entry.id}`}
+                      key={entry.id}
+                      type="button"
+                      role="option"
+                      aria-selected={index === activeIndex}
+                      className={index === activeIndex ? 'active' : ''}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onMouseEnter={() => setActiveIndex(index)}
+                      onClick={() => void selectEntry(entry)}
+                    >
+                      <span className="suggestion-headword">{entry.headword}</span>
+                      <span className="suggestion-preview">{entry.plainText || 'No text preview available.'}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
-          </form>
+          </div>
         )}
         {error && <p className="error" role="alert">{error}</p>}
       </section>
 
-      <div className="content-grid">
-        <section className="results-panel" aria-labelledby="results-heading">
-          <div className="section-heading">
-            <h2 id="results-heading">Results</h2>
-            {searchCompleted && <span>{results.length} found</span>}
-          </div>
-          {searchCompleted && results.length === 0 && <p className="empty-state">No entries found.</p>}
-          {!searchCompleted && !searching && <p className="placeholder">Search for a headword to begin.</p>}
-          <ul className="result-list">
-            {results.map((entry) => (
-              <li key={entry.id}>
-                <button type="button" onClick={() => void selectEntry(entry.id)} className={detail?.id === entry.id ? 'selected' : ''}>
-                  <span className="result-title">{entry.headword}</span>
-                  {entry.redirectTarget && <span className="redirect">Redirect: {entry.redirectTarget}</span>}
-                  <span className="preview">{entry.plainText || 'No text preview available.'}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </section>
-
-        <section className="detail-panel" aria-labelledby="detail-heading">
-          <h2 id="detail-heading">Entry detail</h2>
-          {loadingDetail && <p className="status">Loading entry…</p>}
-          {!loadingDetail && !detail && <p className="placeholder">Select a result to read the full entry.</p>}
-          {!loadingDetail && detail && (
-            <article>
-              <h3>{detail.headword}</h3>
-              {detail.redirectTarget && <p className="redirect-detail">Redirected from this entry to {detail.redirectTarget}</p>}
-              <div className="dictionary-entry" dangerouslySetInnerHTML={{ __html: detail.sanitizedHtml }} />
-            </article>
-          )}
-        </section>
-      </div>
+      <section className="detail-panel" aria-labelledby="detail-heading">
+        <h2 id="detail-heading">Entry detail</h2>
+        {loadingDetail && <p className="status">Loading entry…</p>}
+        {!loadingDetail && !detail && <p className="placeholder">Choose a suggestion to read the full entry.</p>}
+        {!loadingDetail && detail && (
+          <article>
+            <h3>{detail.headword}</h3>
+            {detail.redirectTarget && <p className="redirect-detail">Redirected from this entry to {detail.redirectTarget}</p>}
+            <div className="dictionary-entry" dangerouslySetInnerHTML={{ __html: detail.sanitizedHtml }} />
+          </article>
+        )}
+      </section>
     </main>
   );
+}
+
+function isAbortError(reason: unknown): boolean {
+  return reason instanceof DOMException && reason.name === 'AbortError';
+}
+
+function prepareSuggestions(entries: SearchEntry[]): SearchEntry[] {
+  const seenHeadwords = new Set<string>();
+  return entries.filter((entry) => {
+    if (/\bsb\b/i.test(entry.headword) || seenHeadwords.has(entry.headword)) return false;
+    seenHeadwords.add(entry.headword);
+    return true;
+  });
 }
 
 function messageFrom(reason: unknown): string {
