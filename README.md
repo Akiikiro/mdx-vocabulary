@@ -225,6 +225,25 @@ npm run build
 
 输出目录为 `web/dist/`。Fastify 当前不会托管此目录。
 
+## Local Development / Service Control
+
+需要同时运行 Fastify 和 Vite 时，可以从任意当前目录调用根目录开发脚本：
+
+```bash
+/path/to/mdx-vocabulary/scripts/dev.sh start
+/path/to/mdx-vocabulary/scripts/dev.sh status
+/path/to/mdx-vocabulary/scripts/dev.sh restart
+/path/to/mdx-vocabulary/scripts/dev.sh stop
+```
+
+从仓库根目录可以使用较短形式：
+
+```bash
+./scripts/dev.sh start
+```
+
+脚本只管理 Fastify backend 和 Vite frontend，不管理 PostgreSQL、importer 或 worker。它使用 `.run/backend.pid`、`.run/frontend.pid` 跟踪自己启动的进程组，日志分别写入 `.run/backend.log` 和 `.run/frontend.log`；`.run/` 不纳入版本控制。
+
 ## 测试
 
 运行后端和 integration tests：
@@ -281,6 +300,8 @@ mdx-vocabulary/
 │   ├── entries.test.ts
 │   ├── http-api.integration.test.ts
 │   └── importer.integration.test.ts
+├── scripts/
+│   └── dev.sh
 ├── web/
 │   ├── src/
 │   │   ├── api.ts
