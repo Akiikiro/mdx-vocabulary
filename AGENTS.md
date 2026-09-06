@@ -25,6 +25,41 @@ Browser
   └── /docs/*  → Fastify Swagger
 → PostgreSQL
 ```
+## 0. Execution and Approval Policy
+
+For routine development work inside this repository, proceed autonomously without asking for confirmation for ordinary implementation details.
+
+This includes:
+
+- Reading and modifying files inside this repository
+- Creating normal project files
+- Modifying the Prisma schema
+- Creating additive, non-destructive migrations
+- Running Prisma generate and normal migrations
+- Running TypeScript type checks
+- Running tests
+- Running frontend builds
+- Starting local Fastify and Vite services for verification
+- Updating Swagger / OpenAPI documentation
+- Updating README when required by the repository guidelines
+
+Stop and ask for explicit approval before performing actions involving:
+
+- Data loss
+- Database resets
+- Dropping tables or destructive migrations
+- Deleting or overwriting important existing data
+- Modifying files outside this repository
+- Credentials, secrets, or external services
+- git push or force push
+- Publishing packages
+- Production deployment
+- Other high-risk or irreversible operations
+
+The local PostgreSQL database may contain imported dictionary data that is expensive to recreate.
+
+Never reset the database automatically. If Prisma reports schema drift, requires a reset, or warns that a migration may cause data loss, stop and ask for approval before proceeding.
+
 
 Follow the rules below when modifying this repository.
 

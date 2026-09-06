@@ -29,21 +29,21 @@ enum EntryKind {
 }
 
 model Dictionary {
-  id               String           @id @default(uuid()) @db.Uuid
+  id               String            @id @default(uuid()) @db.Uuid
   name             String
-  sourceFilename   String           @map("source_filename")
-  fileChecksum     String           @map("file_checksum")
-  storageKey       String           @unique @map("storage_key")
-  status           DictionaryStatus @default(uploaded)
-  mdxFormatVersion String?          @map("mdx_format_version")
-  sourceEncoding   String?          @map("source_encoding")
-  headerMetadata   Json?            @map("header_metadata")
-  parserName       String?          @map("parser_name")
-  parserVersion    String?          @map("parser_version")
-  entryCount       Int?             @map("entry_count")
-  failureSummary   String?          @map("failure_summary")
-  createdAt        DateTime         @default(now()) @map("created_at")
-  importedAt       DateTime?        @map("imported_at")
+  sourceFilename   String            @map("source_filename")
+  fileChecksum     String            @map("file_checksum")
+  storageKey       String            @unique @map("storage_key")
+  status           DictionaryStatus  @default(uploaded)
+  mdxFormatVersion String?           @map("mdx_format_version")
+  sourceEncoding   String?           @map("source_encoding")
+  headerMetadata   Json?             @map("header_metadata")
+  parserName       String?           @map("parser_name")
+  parserVersion    String?           @map("parser_version")
+  entryCount       Int?              @map("entry_count")
+  failureSummary   String?           @map("failure_summary")
+  createdAt        DateTime          @default(now()) @map("created_at")
+  importedAt       DateTime?         @map("imported_at")
   entries          DictionaryEntry[]
   importJobs       ImportJob[]
 
@@ -52,24 +52,34 @@ model Dictionary {
 }
 
 model DictionaryEntry {
-  id                     String   @id @default(uuid()) @db.Uuid
-  dictionaryId           String   @map("dictionary_id") @db.Uuid
-  headwordOriginal       String   @map("headword_original")
-  headwordNormalized     String   @map("headword_normalized")
-  sortKey                String   @map("sort_key")
-  entryRaw               String   @map("entry_raw")
-  entrySanitizedHtml     String   @map("entry_sanitized_html")
-  entryPlainText         String   @map("entry_plain_text")
-  entryKind              EntryKind @default(definition) @map("entry_kind")
-  redirectTargetOriginal String?  @map("redirect_target_original")
-  sourceOrdinal          Int      @map("source_ordinal")
-  createdAt              DateTime @default(now()) @map("created_at")
-  dictionary             Dictionary @relation(fields: [dictionaryId], references: [id], onDelete: Cascade)
+  id                     String          @id @default(uuid()) @db.Uuid
+  dictionaryId           String          @map("dictionary_id") @db.Uuid
+  headwordOriginal       String          @map("headword_original")
+  headwordNormalized     String          @map("headword_normalized")
+  sortKey                String          @map("sort_key")
+  entryRaw               String          @map("entry_raw")
+  entrySanitizedHtml     String          @map("entry_sanitized_html")
+  entryPlainText         String          @map("entry_plain_text")
+  entryKind              EntryKind       @default(definition) @map("entry_kind")
+  redirectTargetOriginal String?         @map("redirect_target_original")
+  sourceOrdinal          Int             @map("source_ordinal")
+  createdAt              DateTime        @default(now()) @map("created_at")
+  dictionary             Dictionary      @relation(fields: [dictionaryId], references: [id], onDelete: Cascade)
+  vocabularyItem         VocabularyItem?
 
   @@unique([dictionaryId, sourceOrdinal])
   @@index([dictionaryId, headwordNormalized])
   @@index([dictionaryId, sortKey])
   @@map("dictionary_entries")
+}
+
+model VocabularyItem {
+  id        String          @id @default(uuid()) @db.Uuid
+  entryId   String          @unique @map("entry_id") @db.Uuid
+  createdAt DateTime        @default(now()) @map("created_at")
+  entry     DictionaryEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+
+  @@map("vocabulary_items")
 }
 
 model ImportJob {

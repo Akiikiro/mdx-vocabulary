@@ -3,6 +3,11 @@ import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
 import type { PrismaClient } from '@prisma/client';
 import { DictionaryQueryService } from '../query/dictionary-query-service.js';
+import {
+  VocabularyEntryNotFoundError,
+  VocabularyItemNotFoundError,
+  VocabularyService,
+} from '../vocabulary/vocabulary-service.js';
 
 export interface DictionaryListItemDTO {
   id: string;
@@ -15,6 +20,8 @@ export interface DictionaryListItemDTO {
 
 interface SearchParams { dictionaryId: string }
 interface EntryParams { entryId: string }
+interface VocabularyParams { id: string }
+interface AddVocabularyBody { entryId: string }
 interface SearchQuery { q: string; mode?: 'exact' | 'prefix'; limit?: number; offset?: number }
 
 class HttpError extends Error {
@@ -60,6 +67,16 @@ const detailEntrySchema = {
   required: [...searchEntrySchema.required, 'sanitizedHtml'],
   properties: { ...searchEntrySchema.properties, sanitizedHtml: { type: 'string' } },
 } as const;
+const vocabularyItemSchema = {
+  type: 'object',
+  required: ['id', 'entryId', 'createdAt', 'entry'],
+  properties: {
+    id: { type: 'string', format: 'uuid' },
+    entryId: { type: 'string', format: 'uuid' },
+    createdAt: { type: 'string', format: 'date-time' },
+    entry: searchEntrySchema,
+  },
+} as const;
 
 function errorBody(code: string, message: string) {
   return { error: { code, message } };
@@ -75,6 +92,7 @@ function requireUuid(value: string, name: string): string {
 export async function createApiServer(database: PrismaClient): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
   const queryService = new DictionaryQueryService(database);
+  const vocabularyService = new VocabularyService(database);
 
   await app.register(swagger, {
     openapi: {
@@ -83,6 +101,7 @@ export async function createApiServer(database: PrismaClient): Promise<FastifyIn
       tags: [
         { name: 'dictionaries', description: 'Ready dictionaries and entry search' },
         { name: 'entries', description: 'Dictionary entry details' },
+        { name: 'vocabulary', description: 'Local vocabulary book' },
       ],
     },
   });
@@ -197,6 +216,66 @@ export async function createApiServer(database: PrismaClient): Promise<FastifyIn
     const entry = await queryService.getEntry(entryId);
     if (!entry) throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
     return entry;
+  });
+
+  app.get('/api/vocabulary', {
+    schema: {
+      operationId: 'listVocabulary', summary: 'List vocabulary items', tags: ['vocabulary'],
+      response: {
+        200: {
+          type: 'object', required: ['items'],
+          properties: { items: { type: 'array', items: vocabularyItemSchema } },
+        },
+        500: errorSchema,
+      },
+    },
+  }, async () => ({ items: await vocabularyService.list() }));
+
+  app.post<{ Body: AddVocabularyBody }>('/api/vocabulary', {
+    schema: {
+      operationId: 'addVocabulary', summary: 'Add an entry to vocabulary', tags: ['vocabulary'],
+      body: {
+        type: 'object', required: ['entryId'], additionalProperties: false,
+        properties: { entryId: { type: 'string', format: 'uuid' } },
+      },
+      response: {
+        200: vocabularyItemSchema, 201: vocabularyItemSchema,
+        400: errorSchema, 404: errorSchema, 500: errorSchema,
+      },
+    },
+  }, async (request, reply) => {
+    const entryId = requireUuid(request.body.entryId, 'entryId');
+    try {
+      const result = await vocabularyService.add(entryId);
+      return reply.code(result.created ? 201 : 200).send(result.item);
+    } catch (error) {
+      if (error instanceof VocabularyEntryNotFoundError) {
+        throw new HttpError(404, 'ENTRY_NOT_FOUND', 'Entry not found');
+      }
+      throw error;
+    }
+  });
+
+  app.delete<{ Params: VocabularyParams }>('/api/vocabulary/:id', {
+    schema: {
+      operationId: 'removeVocabulary', summary: 'Remove a vocabulary item', tags: ['vocabulary'],
+      params: {
+        type: 'object', required: ['id'],
+        properties: { id: { type: 'string', format: 'uuid' } },
+      },
+      response: { 204: { type: 'null' }, 400: errorSchema, 404: errorSchema, 500: errorSchema },
+    },
+  }, async (request, reply) => {
+    const id = requireUuid(request.params.id, 'id');
+    try {
+      await vocabularyService.remove(id);
+      return reply.code(204).send();
+    } catch (error) {
+      if (error instanceof VocabularyItemNotFoundError) {
+        throw new HttpError(404, 'VOCABULARY_ITEM_NOT_FOUND', 'Vocabulary item not found');
+      }
+      throw error;
+    }
   });
 
   await app.ready();

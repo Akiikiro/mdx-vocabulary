@@ -1,11 +1,15 @@
 import { type KeyboardEvent, useEffect, useRef, useState } from 'react';
 import {
+  addVocabulary,
   getEntry,
   listDictionaries,
+  listVocabulary,
+  removeVocabulary,
   searchEntries,
   type Dictionary,
   type EntryDetail,
   type SearchEntry,
+  type VocabularyItem,
 } from './api';
 
 const AUTOCOMPLETE_DELAY_MS = 250;
@@ -16,9 +20,13 @@ export function App() {
   const [query, setQuery] = useState('');
   const [suggestions, setSuggestions] = useState<SearchEntry[]>([]);
   const [detail, setDetail] = useState<EntryDetail | null>(null);
+  const [vocabulary, setVocabulary] = useState<VocabularyItem[]>([]);
   const [loadingDictionaries, setLoadingDictionaries] = useState(true);
   const [searching, setSearching] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  const [loadingVocabulary, setLoadingVocabulary] = useState(true);
+  const [savingVocabulary, setSavingVocabulary] = useState(false);
+  const [removingVocabularyId, setRemovingVocabularyId] = useState('');
   const [autocompleteCompleted, setAutocompleteCompleted] = useState(false);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
@@ -42,6 +50,15 @@ export function App() {
       .finally(() => {
         if (active) setLoadingDictionaries(false);
       });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    listVocabulary()
+      .then((items) => { if (active) setVocabulary(items); })
+      .catch((reason: unknown) => { if (active) setError(messageFrom(reason)); })
+      .finally(() => { if (active) setLoadingVocabulary(false); });
     return () => { active = false; };
   }, []);
 
@@ -137,6 +154,33 @@ export function App() {
     }
   }
 
+  async function addCurrentEntry() {
+    if (!detail) return;
+    setSavingVocabulary(true);
+    setError('');
+    try {
+      const item = await addVocabulary(detail.id);
+      setVocabulary((current) => [item, ...current.filter((candidate) => candidate.id !== item.id)]);
+    } catch (reason) {
+      setError(messageFrom(reason));
+    } finally {
+      setSavingVocabulary(false);
+    }
+  }
+
+  async function removeItem(item: VocabularyItem) {
+    setRemovingVocabularyId(item.id);
+    setError('');
+    try {
+      await removeVocabulary(item.id);
+      setVocabulary((current) => current.filter((candidate) => candidate.id !== item.id));
+    } catch (reason) {
+      setError(messageFrom(reason));
+    } finally {
+      setRemovingVocabularyId('');
+    }
+  }
+
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key === 'Escape') {
       autocompleteController.current?.abort();
@@ -160,6 +204,9 @@ export function App() {
 
   const noDictionaries = !loadingDictionaries && dictionaries.length === 0;
   const showDropdown = dropdownOpen && Boolean(query.trim()) && (searching || autocompleteCompleted);
+  const currentVocabularyItem = detail
+    ? vocabulary.find((item) => item.entryId === detail.id)
+    : undefined;
 
   return (
     <main className="page-shell">
@@ -254,14 +301,56 @@ export function App() {
         {!loadingDetail && !detail && <p className="placeholder">Choose a suggestion to read the full entry.</p>}
         {!loadingDetail && detail && (
           <article>
-            <h3>{detail.headword}</h3>
+            <div className="detail-heading-row">
+              <h3>{detail.headword}</h3>
+              <button
+                className="primary-button"
+                type="button"
+                disabled={Boolean(currentVocabularyItem) || savingVocabulary}
+                onClick={() => void addCurrentEntry()}
+              >
+                {currentVocabularyItem ? 'Added to Vocabulary' : savingVocabulary ? 'Adding…' : 'Add to Vocabulary'}
+              </button>
+            </div>
             {detail.redirectTarget && <p className="redirect-detail">Redirected from this entry to {detail.redirectTarget}</p>}
             <div className="dictionary-entry" dangerouslySetInnerHTML={{ __html: detail.sanitizedHtml }} />
           </article>
         )}
       </section>
+
+      <section className="vocabulary-panel" aria-labelledby="vocabulary-heading">
+        <h2 id="vocabulary-heading">Vocabulary Book</h2>
+        {loadingVocabulary && <p className="status">Loading vocabulary…</p>}
+        {!loadingVocabulary && vocabulary.length === 0 && (
+          <p className="placeholder">Words you add will appear here.</p>
+        )}
+        {vocabulary.length > 0 && (
+          <ul className="vocabulary-list">
+            {vocabulary.map((item) => (
+              <li key={item.id}>
+                <button className="vocabulary-headword" type="button" onClick={() => void selectEntry(item.entry)}>
+                  {item.entry.headword}
+                </button>
+                <time dateTime={item.createdAt}>{formatAddedTime(item.createdAt)}</time>
+                <button
+                  className="remove-button"
+                  type="button"
+                  disabled={removingVocabularyId === item.id}
+                  onClick={() => void removeItem(item)}
+                >
+                  {removingVocabularyId === item.id ? 'Removing…' : 'Remove'}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
     </main>
   );
+}
+
+function formatAddedTime(value: string): string {
+  return `Added ${new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))}`;
 }
 
 function isAbortError(reason: unknown): boolean {

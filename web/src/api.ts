@@ -21,6 +21,13 @@ export interface EntryDetail extends SearchEntry {
   sanitizedHtml: string;
 }
 
+export interface VocabularyItem {
+  id: string;
+  entryId: string;
+  createdAt: string;
+  entry: SearchEntry;
+}
+
 interface ApiErrorBody { error?: { message?: string } }
 
 async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
@@ -32,6 +39,16 @@ async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
     } catch {
       // Fall through to the status-based message.
     }
+    throw new Error(body?.error?.message ?? `Request failed (${response.status})`);
+  }
+  return response.json() as Promise<T>;
+}
+
+async function requestJson<T>(path: string, init: RequestInit): Promise<T> {
+  const response = await fetch(path, init);
+  if (!response.ok) {
+    let body: ApiErrorBody | null = null;
+    try { body = await response.json() as ApiErrorBody; } catch { /* Use status fallback. */ }
     throw new Error(body?.error?.message ?? `Request failed (${response.status})`);
   }
   return response.json() as Promise<T>;
@@ -62,4 +79,25 @@ export async function searchEntries(
 
 export function getEntry(entryId: string, signal?: AbortSignal): Promise<EntryDetail> {
   return getJson<EntryDetail>(`/api/entries/${encodeURIComponent(entryId)}`, signal);
+}
+
+export async function listVocabulary(): Promise<VocabularyItem[]> {
+  return (await getJson<{ items: VocabularyItem[] }>('/api/vocabulary')).items;
+}
+
+export function addVocabulary(entryId: string): Promise<VocabularyItem> {
+  return requestJson<VocabularyItem>('/api/vocabulary', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ entryId }),
+  });
+}
+
+export async function removeVocabulary(id: string): Promise<void> {
+  const response = await fetch(`/api/vocabulary/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (!response.ok) {
+    let body: ApiErrorBody | null = null;
+    try { body = await response.json() as ApiErrorBody; } catch { /* Use status fallback. */ }
+    throw new Error(body?.error?.message ?? `Request failed (${response.status})`);
+  }
 }

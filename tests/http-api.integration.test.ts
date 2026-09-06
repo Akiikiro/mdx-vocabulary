@@ -7,7 +7,9 @@ describe('HTTP API → DictionaryQueryService → PostgreSQL', () => {
   let server: FastifyInstance;
   let dictionaryId: string;
   let appleEntryId: string;
+  let vocabularyEntryId: string;
   let nonReadyDictionaryId: string;
+  const createdVocabularyIds = new Set<string>();
 
   beforeAll(async () => {
     const apple = await prisma.dictionaryEntry.findFirst({
@@ -17,6 +19,14 @@ describe('HTTP API → DictionaryQueryService → PostgreSQL', () => {
     if (!apple) throw new Error('Integration database must contain "apple" in a ready dictionary');
     dictionaryId = apple.dictionaryId;
     appleEntryId = apple.id;
+
+    const vocabularyEntry = await prisma.dictionaryEntry.findFirst({
+      where: { dictionaryId, vocabularyItem: null },
+      orderBy: { sourceOrdinal: 'asc' },
+      select: { id: true },
+    });
+    if (!vocabularyEntry) throw new Error('Integration database needs an entry not already in vocabulary');
+    vocabularyEntryId = vocabularyEntry.id;
 
     const nonReady = await prisma.dictionary.create({
       data: {
@@ -34,6 +44,9 @@ describe('HTTP API → DictionaryQueryService → PostgreSQL', () => {
   });
 
   afterAll(async () => {
+    if (createdVocabularyIds.size) {
+      await prisma.vocabularyItem.deleteMany({ where: { id: { in: [...createdVocabularyIds] } } });
+    }
     await server.close();
     await prisma.dictionary.delete({ where: { id: nonReadyDictionaryId } });
     await prisma.$disconnect();
@@ -57,6 +70,8 @@ describe('HTTP API → DictionaryQueryService → PostgreSQL', () => {
         '/api/dictionaries': expect.any(Object),
         '/api/dictionaries/{dictionaryId}/search': expect.any(Object),
         '/api/entries/{entryId}': expect.any(Object),
+        '/api/vocabulary': expect.any(Object),
+        '/api/vocabulary/{id}': expect.any(Object),
       }),
     }));
   });
@@ -148,5 +163,61 @@ describe('HTTP API → DictionaryQueryService → PostgreSQL', () => {
     const detail = await get(`/api/entries/${appleEntryId}`);
     expect(JSON.stringify(search.body)).not.toMatch(/entry_?raw/i);
     expect(JSON.stringify(detail.body)).not.toMatch(/entry_?raw/i);
+  });
+
+  it('adds, lists, deduplicates, and removes a vocabulary item without exposing entryRaw', async () => {
+    const added = await server.inject({
+      method: 'POST', url: '/api/vocabulary', payload: { entryId: vocabularyEntryId },
+    });
+    expect(added.statusCode).toBe(201);
+    const item = added.json();
+    createdVocabularyIds.add(item.id);
+    expect(item).toEqual(expect.objectContaining({
+      id: expect.any(String), entryId: vocabularyEntryId, createdAt: expect.any(String),
+      entry: expect.objectContaining({ id: vocabularyEntryId, headword: expect.any(String) }),
+    }));
+    expect(JSON.stringify(item)).not.toMatch(/entry_?raw/i);
+
+    const duplicate = await server.inject({
+      method: 'POST', url: '/api/vocabulary', payload: { entryId: vocabularyEntryId },
+    });
+    expect(duplicate.statusCode).toBe(200);
+    expect(duplicate.json()).toEqual(item);
+
+    const listed = await server.inject({ method: 'GET', url: '/api/vocabulary' });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json().items.filter((candidate: { entryId: string }) => candidate.entryId === vocabularyEntryId)).toEqual([item]);
+    expect(JSON.stringify(listed.json())).not.toMatch(/entry_?raw/i);
+
+    const removed = await server.inject({ method: 'DELETE', url: `/api/vocabulary/${item.id}` });
+    expect(removed.statusCode).toBe(204);
+    createdVocabularyIds.delete(item.id);
+
+    const afterRemove = await server.inject({ method: 'GET', url: '/api/vocabulary' });
+    expect(afterRemove.json().items.some((candidate: { id: string }) => candidate.id === item.id)).toBe(false);
+  });
+
+  it('rejects invalid vocabulary input', async () => {
+    const invalidEntry = await server.inject({
+      method: 'POST', url: '/api/vocabulary', payload: { entryId: 'not-a-uuid' },
+    });
+    const invalidItem = await server.inject({ method: 'DELETE', url: '/api/vocabulary/not-a-uuid' });
+    expect(invalidEntry.statusCode).toBe(400);
+    expect(invalidEntry.json().error.code).toBe('INVALID_QUERY');
+    expect(invalidItem.statusCode).toBe(400);
+    expect(invalidItem.json().error.code).toBe('INVALID_QUERY');
+  });
+
+  it('returns 404 for nonexistent entries and vocabulary items', async () => {
+    const missingEntry = await server.inject({
+      method: 'POST', url: '/api/vocabulary', payload: { entryId: crypto.randomUUID() },
+    });
+    const missingItem = await server.inject({
+      method: 'DELETE', url: `/api/vocabulary/${crypto.randomUUID()}`,
+    });
+    expect(missingEntry.statusCode).toBe(404);
+    expect(missingEntry.json().error.code).toBe('ENTRY_NOT_FOUND');
+    expect(missingItem.statusCode).toBe(404);
+    expect(missingItem.json().error.code).toBe('VOCABULARY_ITEM_NOT_FOUND');
   });
 });
