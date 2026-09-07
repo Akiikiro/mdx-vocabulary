@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { config } from '../config.js';
+import { detectStylesheetCompatibilityProfileFromFile } from '../dictionary-stylesheets/compatibility-profiles.js';
 import { prisma } from '../db.js';
 import { PostgresJobQueue } from '../jobs/postgres-job-queue.js';
 import { LocalDirectoryStorage } from '../storage/local-directory-storage.js';
@@ -16,9 +17,21 @@ if (stylesheetOptionIndex !== -1 && (!stylesheetUrl || !stylesheetUrl.startsWith
 const absolutePath = path.resolve(inputPath);
 if (path.extname(absolutePath).toLowerCase() !== '.mdx') throw new Error('Only .mdx files are supported');
 await fs.promises.access(absolutePath, fs.constants.R_OK);
+let stylesheetCompatibilityProfile: string | null = null;
+if (stylesheetUrl) {
+  const publicRoot = path.resolve(process.cwd(), 'web/public');
+  const stylesheetPath = path.resolve(publicRoot, `.${stylesheetUrl}`);
+  if (stylesheetPath.startsWith(`${publicRoot}${path.sep}`)) {
+    try {
+      stylesheetCompatibilityProfile = await detectStylesheetCompatibilityProfileFromFile(stylesheetPath);
+    } catch (error) {
+      if (!(typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT')) throw error;
+    }
+  }
+}
 const storage = new LocalDirectoryStorage(config.dataDir);
 const stored = await storage.save(fs.createReadStream(absolutePath), path.basename(absolutePath));
-const dictionary = await prisma.dictionary.create({ data: { name: path.basename(absolutePath, '.mdx'), sourceFilename: path.basename(absolutePath), fileChecksum: stored.checksum, storageKey: stored.storageKey, status: 'queued', stylesheetUrl } });
+const dictionary = await prisma.dictionary.create({ data: { name: path.basename(absolutePath, '.mdx'), sourceFilename: path.basename(absolutePath), fileChecksum: stored.checksum, storageKey: stored.storageKey, status: 'queued', stylesheetUrl, stylesheetCompatibilityProfile } });
 const queue = new PostgresJobQueue(prisma); const jobId = await queue.enqueue(dictionary.id);
 const child = spawn(process.execPath, ['--import', 'tsx', 'src/worker.ts', jobId], { cwd: process.cwd(), stdio: 'inherit', env: process.env });
 const exitCode = await new Promise<number>((resolve, reject) => { child.on('error', reject); child.on('exit', (code) => resolve(code ?? 1)); });

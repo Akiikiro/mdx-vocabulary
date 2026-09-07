@@ -7,6 +7,7 @@
 ## 已实现功能
 
 - 将本地 `.mdx` 文件复制到本地数据目录并计算 SHA-256 checksum。
+- 从浏览器选择并上传完整 MDict 文件夹；后端流式保存、验证 package，并复用 worker 导入其中唯一的 MDX。
 - 使用 PostgreSQL 保存 dictionary、entry 和 import job。
 - 使用 `js-mdict` 读取 MDX metadata 和词条。
 - 批量导入词条，记录导入状态与进度。
@@ -19,6 +20,7 @@
 - Swagger UI 和 JSON/YAML OpenAPI 文档。
 - React Dictionary view：选择字典、prefix autocomplete 候选、键盘选择及可折叠的完整词条展示。
 - Dictionary 可声明可选 stylesheet URL；Oxford 8 使用随 Web 应用发布的 `O8C.css`，恢复 sanitized HTML 中保留 class 所支持的词典样式。MDD 媒体资源尚未支持。
+- Package 中唯一的 CSS 会自动绑定并由 Fastify dictionary asset route 提供；已知 stylesheet 通过内容 fingerprint 获得 rendering compatibility profile，使重复导入保持相同 override。MDD、图片等资源会按 dictionary 保存，但尚不解析或提供读取 API。
 - 单用户本地 Vocabulary Book：收藏词条到 PostgreSQL、持久展示、重新打开完整词条和移除收藏。
 - Importer、查询服务、HTTP API 的单元及 PostgreSQL integration tests。
 
@@ -51,7 +53,7 @@ MDX
 
 ### 数据从 MDX 到浏览器
 
-1. `import-mdx` 将源 MDX 保存到 `APP_DATA_DIR`，创建 dictionary 和 queued import job。
+1. 浏览器 package import 或 `import-mdx` CLI 将源 MDX 保存到 `APP_DATA_DIR`，创建 dictionary 和 queued import job。
 2. Worker claim job，通过 `JsMdictAdapter` 检查文件 metadata 并迭代词条。
 3. Importer 清除 PostgreSQL 不接受的 NUL 字符，标准化 headword，生成 sort key，识别 redirect，清洗 HTML，并提取纯文本。
 4. 词条按 `IMPORT_BATCH_SIZE` 批量写入 PostgreSQL；成功后 dictionary 变为 `ready`。
@@ -60,16 +62,39 @@ MDX
 7. React 展示搜索 DTO 的纯文本预览；点击结果后获取 detail DTO，并渲染后端保存的 `sanitizedHtml`。
 8. 收藏操作通过 `VocabularyService` 将 `VocabularyItem` 关联到具体 `DictionaryEntry`；浏览器刷新后从 PostgreSQL 恢复收藏列表。
 
+### Dictionary package import
+
+浏览器使用目录 file input 保留 `webkitRelativePath`，只在本地对扩展名和数量做预览。后端通过 multipart stream 将每个文件写入 staging，并独立验证 package 必须恰好包含一个 MDX、最多一个 CSS。验证成功后，文件原子移动到 dictionary 专属目录，再以 transaction 创建 Dictionary 和 ImportJob；API 启动现有 worker，前端轮询 queued/importing/ready/failed 状态。Stylesheet 内容 SHA-256 用于识别已知 compatibility profile，不依赖 dictionary UUID、文件名或词典名；启动时会幂等补齐旧 package import 尚未记录的 profile。
+
+Package storage layout：
+
+```text
+APP_DATA_DIR/
+└── dictionaries/<dictionary-id>/
+    ├── source.mdx
+    ├── styles/
+    │   └── <package stylesheet>.css
+    └── resources/
+        ├── <source>.mdd
+        ├── <source>.1.mdd
+        └── <other package files>
+```
+
+Phase 1 不解包 MDD，也不提供图片、声音或其他 resource lookup。Asset route 只允许读取该 dictionary 自动绑定的 CSS。
+
 ## 主要模块
 
 | 路径 | 职责 |
 | --- | --- |
-| `prisma/schema.prisma` | Dictionary（包括可选 stylesheet URL）、DictionaryEntry、VocabularyItem、ImportJob schema、枚举和索引。 |
+| `prisma/schema.prisma` | Dictionary（包括可选 stylesheet URL 和 compatibility profile）、DictionaryEntry、VocabularyItem、ImportJob schema、枚举和索引。 |
 | `src/cli/import-mdx.ts` | 本地 MDX 导入命令；保存文件、创建 job、启动指定 job worker、输出摘要。 |
 | `src/worker.ts` | Claim queued job 并调用 importer；队列为空后退出。 |
 | `src/importer/mdx-importer.ts` | 导入状态、批处理、内容转换和失败记录。 |
+| `src/importer/dictionary-package-import-service.ts` | Package 分类验证、dictionary-owned layout 提交及 Dictionary/ImportJob 创建。 |
 | `src/mdx/` | Parser 接口以及基于 `js-mdict` 的实现。 |
 | `src/storage/` | MDX 文件存储接口和本地目录实现。 |
+| `src/storage/dictionary-package-storage.ts` | Multipart staging、安全路径校验、dictionary package 原子存储和 CSS asset 定位。 |
+| `src/dictionary-stylesheets/` | Stylesheet fingerprint/profile 检测，以及已有 package metadata 的幂等 reconciliation。 |
 | `src/jobs/` | PostgreSQL job queue、进度和状态定义。 |
 | `src/entries/` | Headword normalization、sort key、redirect 检测、HTML sanitization、纯文本提取。 |
 | `src/query/dictionary-query-service.ts` | Exact、prefix、entry detail 查询和一跳 redirect 解析。 |
@@ -189,6 +214,9 @@ http://127.0.0.1:3000
 | Method | Path | 说明 |
 | --- | --- | --- |
 | GET | `/api/dictionaries` | 按 `importedAt DESC` 列出 ready dictionaries，包括可选 `stylesheetUrl`。 |
+| POST | `/api/dictionaries/import` | 接受多文件 `multipart/form-data` package，验证并排队导入，返回 202。 |
+| GET | `/api/dictionaries/:dictionaryId/import-status` | 返回 queued/importing/ready/failed 和导入进度。 |
+| GET | `/api/dictionaries/:dictionaryId/assets/styles/:file.css` | 读取该 dictionary 自动绑定的 CSS；不提供其他 package resources。 |
 | GET | `/api/dictionaries/:dictionaryId/search` | 搜索指定 ready dictionary；支持 `q`、`mode`、`limit`、`offset`。 |
 | GET | `/api/entries/:entryId` | 获取 entry detail 和 sanitized HTML。 |
 | GET | `/api/vocabulary` | 按添加时间倒序列出收藏及其安全 entry 摘要。 |
@@ -234,7 +262,9 @@ http://127.0.0.1:5173
 
 `web/vite.config.ts` 将 `/api` 转发到 `http://127.0.0.1:3000`。前端源代码始终请求相对 `/api/...` URL，不依赖固定 backend host 或 port。
 
-Dictionary stylesheet 由 `/api/dictionaries` 返回的 `stylesheetUrl` 驱动，只在显示对应词典时挂载。当前 Oxford 8 指向 `/dictionaries/oxford8/O8C.css`；静态文件随 Vite build 发布。该机制只负责 CSS，不提供 MDD、图片、字体或音频资源解析。
+Dictionary stylesheet 由 `/api/dictionaries` 返回的 `stylesheetUrl` 和 `stylesheetCompatibilityProfile` 驱动，只在显示对应词典时挂载。原始 stylesheet 先加载，profile 对应的应用 compatibility override 后加载。Oxford 8 profile 由 O8C.css 内容 fingerprint 识别，因此静态旧数据、CLI 可读取的本地 stylesheet 及 folder re-import 不依赖 Dictionary UUID，均可获得一致的 sense marker 修正。该机制只负责 CSS，不提供 MDD、图片、字体或音频资源解析。
+
+Dictionary view 的 **Import Dictionary** 使用浏览器目录选择器。选中后会显示 MDX、CSS、MDD、图片及总文件数；确认 Import 后显示 Uploading、Queued、Importing、Ready 或 Failed。Ready 后 dictionary selector 会刷新并自动选中新词典。Package import 的 stylesheet 由 backend asset route 提供，不需要手工指定 `--stylesheet-url`。
 
 页面会在输入停止约 250ms 后通过现有 prefix API 获取最多 30 个原始候选，再过滤 `sb` 模板、去重，并优先展示独立词头、用 `sth` 短语候选补足，最终最多展示 10 个有效候选。点击候选，或使用方向键选择后按 Enter，会直接加载完整词条；Escape 可以关闭候选列表。
 

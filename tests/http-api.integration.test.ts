@@ -68,6 +68,9 @@ describe('HTTP API → DictionaryQueryService → PostgreSQL', () => {
       openapi: '3.0.3',
       paths: expect.objectContaining({
         '/api/dictionaries': expect.any(Object),
+        '/api/dictionaries/import': expect.any(Object),
+        '/api/dictionaries/{dictionaryId}/import-status': expect.any(Object),
+        '/api/dictionaries/{dictionaryId}/assets/{*}': expect.any(Object),
         '/api/dictionaries/{dictionaryId}/search': expect.any(Object),
         '/api/entries/{entryId}': expect.any(Object),
         '/api/vocabulary': expect.any(Object),
@@ -97,6 +100,7 @@ describe('HTTP API → DictionaryQueryService → PostgreSQL', () => {
         'sourceEncoding',
         'importedAt',
         'stylesheetUrl',
+        'stylesheetCompatibilityProfile',
       ]);
       expect(item).not.toHaveProperty('storageKey');
       expect(item).not.toHaveProperty('fileChecksum');
@@ -104,7 +108,9 @@ describe('HTTP API → DictionaryQueryService → PostgreSQL', () => {
       expect(item).not.toHaveProperty('failureSummary');
     }
     expect(body.items.find((item: { id: string }) => item.id === dictionaryId).stylesheetUrl)
-      .toBe('/dictionaries/oxford8/O8C.css');
+      .toMatch(/(?:\/dictionaries\/oxford8|\/api\/dictionaries\/.+\/assets\/styles)\/O8C\.css/);
+    expect(body.items.find((item: { id: string }) => item.id === dictionaryId).stylesheetCompatibilityProfile)
+      .toBe('oxford8');
   });
 
   it('returns exact apple with pagination metadata', async () => {

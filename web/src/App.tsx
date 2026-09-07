@@ -2,6 +2,8 @@ import { type KeyboardEvent, useEffect, useRef, useState } from 'react';
 import {
   addVocabulary,
   getEntry,
+  getDictionaryImportStatus,
+  importDictionaryPackage,
   listDictionaries,
   listVocabulary,
   removeVocabulary,
@@ -37,14 +39,19 @@ export function App() {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
   const [error, setError] = useState('');
+  const [packageFiles, setPackageFiles] = useState<File[]>([]);
+  const [importStatus, setImportStatus] = useState('');
   const autocompleteController = useRef<AbortController | null>(null);
   const detailController = useRef<AbortController | null>(null);
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const skipAutocompleteValue = useRef<string | null>(null);
   const styledDictionaryId = detail?.dictionaryId ?? dictionaryId;
   const dictionaryStylesheetUrl = dictionaries.find((dictionary) => dictionary.id === styledDictionaryId)?.stylesheetUrl ?? null;
+  const dictionaryStylesheetCompatibilityProfile = dictionaries.find(
+    (dictionary) => dictionary.id === styledDictionaryId,
+  )?.stylesheetCompatibilityProfile ?? null;
 
-  useDictionaryStylesheet(dictionaryStylesheetUrl);
+  useDictionaryStylesheet(dictionaryStylesheetUrl, dictionaryStylesheetCompatibilityProfile);
 
   useEffect(() => {
     let active = true;
@@ -180,6 +187,42 @@ export function App() {
     }
   }
 
+  async function importSelectedPackage() {
+    if (!packageFiles.length) return;
+    setError('');
+    setImportStatus('Uploading…');
+    try {
+      const imported = await importDictionaryPackage(packageFiles);
+      setImportStatus('Queued');
+      for (;;) {
+        await delay(1500);
+        const status = await getDictionaryImportStatus(imported.dictionaryId);
+        if (status.status === 'queued') {
+          setImportStatus('Queued');
+          continue;
+        }
+        if (status.status === 'importing') {
+          const total = status.progress.total;
+          setImportStatus(total ? `Importing… ${status.progress.current.toLocaleString()} / ${total.toLocaleString()}` : 'Importing…');
+          continue;
+        }
+        if (status.status === 'failed') {
+          setImportStatus('Failed');
+          return;
+        }
+        const items = await listDictionaries();
+        setDictionaries(items);
+        setDictionaryId(imported.dictionaryId);
+        setPackageFiles([]);
+        setImportStatus('Ready');
+        return;
+      }
+    } catch (reason) {
+      setImportStatus('Failed');
+      setError(messageFrom(reason));
+    }
+  }
+
   async function removeItem(item: VocabularyItem) {
     setRemovingVocabularyId(item.id);
     setError('');
@@ -257,6 +300,40 @@ export function App() {
       {currentView === 'dictionary' && <>
       <section className="search-panel" aria-labelledby="search-heading">
         <h2 id="search-heading">Search</h2>
+        <div className="import-panel">
+          <div>
+            <h3>Import Dictionary</h3>
+            <p>Select an MDict dictionary folder. Package files are copied into application storage.</p>
+          </div>
+          <label className="secondary-button import-picker">
+            Choose folder
+            <input
+              type="file"
+              ref={(input) => { input?.setAttribute('webkitdirectory', ''); }}
+              multiple
+              onChange={(event) => {
+                setPackageFiles(Array.from(event.target.files ?? []));
+                setImportStatus('');
+                setError('');
+              }}
+            />
+          </label>
+        </div>
+        {packageFiles.length > 0 && (
+          <div className="package-summary">
+            <h3>Dictionary package</h3>
+            <dl>
+              <div><dt>MDX</dt><dd>{packageFileNames(packageFiles, '.mdx').join(', ') || 'None'}</dd></div>
+              <div><dt>Stylesheet</dt><dd>{packageFileNames(packageFiles, '.css').join(', ') || 'None'}</dd></div>
+              <div><dt>Resources</dt><dd>{packageFileNames(packageFiles, '.mdd').length} MDD files · {imageFileCount(packageFiles)} images</dd></div>
+              <div><dt>Files</dt><dd>{packageFiles.length}</dd></div>
+            </dl>
+            <button className="primary-button" type="button" disabled={Boolean(importStatus && importStatus !== 'Failed')} onClick={() => void importSelectedPackage()}>
+              Import
+            </button>
+          </div>
+        )}
+        {importStatus && <p className={`import-status ${importStatus === 'Failed' ? 'failed' : ''}`} role="status">{importStatus}</p>}
         {loadingDictionaries && <p className="status">Loading dictionaries…</p>}
         {noDictionaries && <p className="empty-state">No ready dictionaries available.</p>}
 
@@ -403,10 +480,10 @@ export function App() {
   );
 }
 
-function useDictionaryStylesheet(stylesheetUrl: string | null) {
+function useDictionaryStylesheet(stylesheetUrl: string | null, compatibilityProfile: string | null) {
   useEffect(() => {
     document.querySelectorAll('link[data-dictionary-stylesheet]').forEach((stylesheet) => stylesheet.remove());
-    const stylesheets = dictionaryStylesheetUrls(stylesheetUrl).map((url) => {
+    const stylesheets = dictionaryStylesheetUrls(stylesheetUrl, compatibilityProfile).map((url) => {
       const stylesheet = document.createElement('link');
       stylesheet.rel = 'stylesheet';
       stylesheet.dataset.dictionaryStylesheet = '';
@@ -415,7 +492,7 @@ function useDictionaryStylesheet(stylesheetUrl: string | null) {
       return stylesheet;
     });
     return () => stylesheets.forEach((stylesheet) => stylesheet.remove());
-  }, [stylesheetUrl]);
+  }, [stylesheetUrl, compatibilityProfile]);
 }
 
 function formatAddedTime(value: string): string {
@@ -440,4 +517,18 @@ function prepareSuggestions(entries: SearchEntry[]): SearchEntry[] {
 
 function messageFrom(reason: unknown): string {
   return reason instanceof Error ? reason.message : 'Something went wrong. Please try again.';
+}
+
+function packageFileNames(files: readonly File[], extension: string): string[] {
+  return files
+    .filter((file) => file.name.toLowerCase().endsWith(extension))
+    .map((file) => file.webkitRelativePath || file.name);
+}
+
+function imageFileCount(files: readonly File[]): number {
+  return files.filter((file) => /\.(?:jpe?g|png|gif|webp)$/i.test(file.name)).length;
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }

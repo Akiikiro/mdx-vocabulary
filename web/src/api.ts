@@ -6,6 +6,7 @@ export interface Dictionary {
   sourceEncoding: string | null;
   importedAt: string | null;
   stylesheetUrl: string | null;
+  stylesheetCompatibilityProfile: string | null;
 }
 
 export interface SearchEntry {
@@ -27,6 +28,23 @@ export interface VocabularyItem {
   entryId: string;
   createdAt: string;
   entry: SearchEntry;
+}
+
+export interface DictionaryPackageImport {
+  dictionaryId: string;
+  jobId: string;
+  name: string;
+  status: 'queued';
+  stylesheetUrl: string | null;
+  stylesheetCompatibilityProfile: string | null;
+  fileCount: number;
+  resourceCount: number;
+}
+
+export interface DictionaryImportStatus {
+  dictionaryId: string;
+  status: 'queued' | 'importing' | 'ready' | 'failed';
+  progress: { current: number; total: number | null };
 }
 
 interface ApiErrorBody { error?: { message?: string } }
@@ -101,4 +119,14 @@ export async function removeVocabulary(id: string): Promise<void> {
     try { body = await response.json() as ApiErrorBody; } catch { /* Use status fallback. */ }
     throw new Error(body?.error?.message ?? `Request failed (${response.status})`);
   }
+}
+
+export function importDictionaryPackage(files: readonly File[]): Promise<DictionaryPackageImport> {
+  const body = new FormData();
+  for (const file of files) body.append('files', file, file.webkitRelativePath || file.name);
+  return requestJson<DictionaryPackageImport>('/api/dictionaries/import', { method: 'POST', body });
+}
+
+export function getDictionaryImportStatus(dictionaryId: string): Promise<DictionaryImportStatus> {
+  return getJson<DictionaryImportStatus>(`/api/dictionaries/${encodeURIComponent(dictionaryId)}/import-status`);
 }
