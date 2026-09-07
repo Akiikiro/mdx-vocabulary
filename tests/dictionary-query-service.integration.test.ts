@@ -8,10 +8,10 @@ describe('DictionaryQueryService → PostgreSQL', () => {
 
   beforeAll(async () => {
     const apple = await prisma.dictionaryEntry.findFirst({
-      where: { headwordNormalized: 'apple' },
+      where: { headwordNormalized: 'apple', dictionary: { status: 'ready', entryCount: 92667 } },
       select: { dictionaryId: true },
     });
-    if (!apple) throw new Error('Integration database must contain an "apple" entry');
+    if (!apple) throw new Error('Integration database must contain "apple" in the Oxford fixture');
     dictionaryId = apple.dictionaryId;
   });
 

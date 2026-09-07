@@ -1,0 +1,4 @@
+/* Align Oxford's fixed-size sense marker with the application's inherited line height. */
+.z_n {
+  line-height: 16px;
+}

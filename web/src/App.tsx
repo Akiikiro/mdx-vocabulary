@@ -11,15 +11,21 @@ import {
   type SearchEntry,
   type VocabularyItem,
 } from './api';
+import { dictionaryStylesheetUrls } from './dictionary-stylesheets';
 
 const AUTOCOMPLETE_DELAY_MS = 250;
+const AUTOCOMPLETE_CANDIDATE_LIMIT = 30;
+const AUTOCOMPLETE_DISPLAY_LIMIT = 10;
+type TopLevelView = 'dictionary' | 'vocabulary';
 
 export function App() {
+  const [currentView, setCurrentView] = useState<TopLevelView>('dictionary');
   const [dictionaries, setDictionaries] = useState<Dictionary[]>([]);
   const [dictionaryId, setDictionaryId] = useState('');
   const [query, setQuery] = useState('');
   const [suggestions, setSuggestions] = useState<SearchEntry[]>([]);
   const [detail, setDetail] = useState<EntryDetail | null>(null);
+  const [detailExpanded, setDetailExpanded] = useState(true);
   const [vocabulary, setVocabulary] = useState<VocabularyItem[]>([]);
   const [loadingDictionaries, setLoadingDictionaries] = useState(true);
   const [searching, setSearching] = useState(false);
@@ -35,6 +41,10 @@ export function App() {
   const detailController = useRef<AbortController | null>(null);
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const skipAutocompleteValue = useRef<string | null>(null);
+  const styledDictionaryId = detail?.dictionaryId ?? dictionaryId;
+  const dictionaryStylesheetUrl = dictionaries.find((dictionary) => dictionary.id === styledDictionaryId)?.stylesheetUrl ?? null;
+
+  useDictionaryStylesheet(dictionaryStylesheetUrl);
 
   useEffect(() => {
     let active = true;
@@ -94,7 +104,7 @@ export function App() {
       setSearching(true);
       try {
         const items = await searchEntries(dictionaryId, trimmedQuery, 'prefix', {
-          limit: 10,
+          limit: AUTOCOMPLETE_CANDIDATE_LIMIT,
           offset: 0,
           signal: controller.signal,
         });
@@ -136,6 +146,8 @@ export function App() {
     setActiveIndex(-1);
     setSearching(false);
     setError('');
+    setDetailExpanded(true);
+    setDictionaryId(entry.dictionaryId);
 
     detailController.current?.abort();
     const controller = new AbortController();
@@ -181,6 +193,11 @@ export function App() {
     }
   }
 
+  function openVocabularyEntry(item: VocabularyItem) {
+    setCurrentView('dictionary');
+    void selectEntry(item.entry);
+  }
+
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key === 'Escape') {
       autocompleteController.current?.abort();
@@ -216,6 +233,28 @@ export function App() {
         <p>Start typing a headword, then choose a suggestion to read the complete entry.</p>
       </header>
 
+      <nav className="top-navigation" aria-label="Main views">
+        <button
+          type="button"
+          className={currentView === 'dictionary' ? 'active' : ''}
+          aria-pressed={currentView === 'dictionary'}
+          onClick={() => setCurrentView('dictionary')}
+        >
+          Dictionary
+        </button>
+        <button
+          type="button"
+          className={currentView === 'vocabulary' ? 'active' : ''}
+          aria-pressed={currentView === 'vocabulary'}
+          onClick={() => setCurrentView('vocabulary')}
+        >
+          Vocabulary Book
+        </button>
+      </nav>
+
+      {error && <p className="error global-error" role="alert">{error}</p>}
+
+      {currentView === 'dictionary' && <>
       <section className="search-panel" aria-labelledby="search-heading">
         <h2 id="search-heading">Search</h2>
         {loadingDictionaries && <p className="status">Loading dictionaries…</p>}
@@ -292,7 +331,6 @@ export function App() {
             </div>
           </div>
         )}
-        {error && <p className="error" role="alert">{error}</p>}
       </section>
 
       <section className="detail-panel" aria-labelledby="detail-heading">
@@ -303,22 +341,38 @@ export function App() {
           <article>
             <div className="detail-heading-row">
               <h3>{detail.headword}</h3>
-              <button
-                className="primary-button"
-                type="button"
-                disabled={Boolean(currentVocabularyItem) || savingVocabulary}
-                onClick={() => void addCurrentEntry()}
-              >
-                {currentVocabularyItem ? 'Added to Vocabulary' : savingVocabulary ? 'Adding…' : 'Add to Vocabulary'}
-              </button>
+              <div className="detail-actions">
+                <button
+                  className="secondary-button"
+                  type="button"
+                  aria-expanded={detailExpanded}
+                  aria-controls="dictionary-entry-content"
+                  onClick={() => setDetailExpanded((expanded) => !expanded)}
+                >
+                  {detailExpanded ? 'Collapse' : 'Expand'}
+                </button>
+                <button
+                  className="primary-button"
+                  type="button"
+                  disabled={Boolean(currentVocabularyItem) || savingVocabulary}
+                  onClick={() => void addCurrentEntry()}
+                >
+                  {currentVocabularyItem ? 'Added to Vocabulary' : savingVocabulary ? 'Adding…' : 'Add to Vocabulary'}
+                </button>
+              </div>
             </div>
             {detail.redirectTarget && <p className="redirect-detail">Redirected from this entry to {detail.redirectTarget}</p>}
-            <div className="dictionary-entry" dangerouslySetInnerHTML={{ __html: detail.sanitizedHtml }} />
+            <div
+              id="dictionary-entry-content"
+              className={`dictionary-entry${detailExpanded ? '' : ' collapsed'}`}
+              dangerouslySetInnerHTML={{ __html: detail.sanitizedHtml }}
+            />
           </article>
         )}
       </section>
+      </>}
 
-      <section className="vocabulary-panel" aria-labelledby="vocabulary-heading">
+      {currentView === 'vocabulary' && <section className="vocabulary-panel" aria-labelledby="vocabulary-heading">
         <h2 id="vocabulary-heading">Vocabulary Book</h2>
         {loadingVocabulary && <p className="status">Loading vocabulary…</p>}
         {!loadingVocabulary && vocabulary.length === 0 && (
@@ -328,7 +382,7 @@ export function App() {
           <ul className="vocabulary-list">
             {vocabulary.map((item) => (
               <li key={item.id}>
-                <button className="vocabulary-headword" type="button" onClick={() => void selectEntry(item.entry)}>
+                <button className="vocabulary-headword" type="button" onClick={() => openVocabularyEntry(item)}>
                   {item.entry.headword}
                 </button>
                 <time dateTime={item.createdAt}>{formatAddedTime(item.createdAt)}</time>
@@ -344,9 +398,24 @@ export function App() {
             ))}
           </ul>
         )}
-      </section>
+      </section>}
     </main>
   );
+}
+
+function useDictionaryStylesheet(stylesheetUrl: string | null) {
+  useEffect(() => {
+    document.querySelectorAll('link[data-dictionary-stylesheet]').forEach((stylesheet) => stylesheet.remove());
+    const stylesheets = dictionaryStylesheetUrls(stylesheetUrl).map((url) => {
+      const stylesheet = document.createElement('link');
+      stylesheet.rel = 'stylesheet';
+      stylesheet.dataset.dictionaryStylesheet = '';
+      stylesheet.href = url;
+      document.head.append(stylesheet);
+      return stylesheet;
+    });
+    return () => stylesheets.forEach((stylesheet) => stylesheet.remove());
+  }, [stylesheetUrl]);
 }
 
 function formatAddedTime(value: string): string {
@@ -359,11 +428,14 @@ function isAbortError(reason: unknown): boolean {
 
 function prepareSuggestions(entries: SearchEntry[]): SearchEntry[] {
   const seenHeadwords = new Set<string>();
-  return entries.filter((entry) => {
+  const uniqueSuggestions = entries.filter((entry) => {
     if (/\bsb\b/i.test(entry.headword) || seenHeadwords.has(entry.headword)) return false;
     seenHeadwords.add(entry.headword);
     return true;
   });
+  const standalone = uniqueSuggestions.filter((entry) => !/\bsth\b/i.test(entry.headword));
+  const phrasePatterns = uniqueSuggestions.filter((entry) => /\bsth\b/i.test(entry.headword));
+  return [...standalone, ...phrasePatterns].slice(0, AUTOCOMPLETE_DISPLAY_LIMIT);
 }
 
 function messageFrom(reason: unknown): string {

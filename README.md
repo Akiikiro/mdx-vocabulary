@@ -17,7 +17,8 @@
 - 根据 entry ID 获取词条详情。
 - Fastify 参数校验、统一错误响应和 OpenAPI schema。
 - Swagger UI 和 JSON/YAML OpenAPI 文档。
-- React 搜索页面：选择字典、prefix autocomplete 候选、键盘选择和完整词条展示。
+- React Dictionary view：选择字典、prefix autocomplete 候选、键盘选择及可折叠的完整词条展示。
+- Dictionary 可声明可选 stylesheet URL；Oxford 8 使用随 Web 应用发布的 `O8C.css`，恢复 sanitized HTML 中保留 class 所支持的词典样式。MDD 媒体资源尚未支持。
 - 单用户本地 Vocabulary Book：收藏词条到 PostgreSQL、持久展示、重新打开完整词条和移除收藏。
 - Importer、查询服务、HTTP API 的单元及 PostgreSQL integration tests。
 
@@ -42,6 +43,7 @@ MDX
 - Importer 负责导入编排、状态更新、批量持久化和内容预处理。
 - `MdxParserAdapter` 隔离具体 MDX parser；当前实现使用 `js-mdict`。
 - Prisma 是 PostgreSQL 的 schema 和数据访问层。
+- Dictionary 的可选 `stylesheetUrl` 元数据声明其浏览器 stylesheet；没有声明的词典继续使用应用基础样式。
 - `DictionaryQueryService` 只负责只读 entry 查询和一跳 redirect 解析。
 - `VocabularyService` 负责收藏的幂等添加、列表查询和移除，并返回不含原始 MDX HTML 的显式 DTO。
 - Fastify 负责 HTTP 路由、校验、错误响应和 OpenAPI，不托管前端静态文件。
@@ -53,7 +55,7 @@ MDX
 2. Worker claim job，通过 `JsMdictAdapter` 检查文件 metadata 并迭代词条。
 3. Importer 清除 PostgreSQL 不接受的 NUL 字符，标准化 headword，生成 sort key，识别 redirect，清洗 HTML，并提取纯文本。
 4. 词条按 `IMPORT_BATCH_SIZE` 批量写入 PostgreSQL；成功后 dictionary 变为 `ready`。
-5. 浏览器先请求 ready dictionary 列表，再向指定 dictionary 发起 exact 或 prefix 搜索。
+5. 浏览器先请求 ready dictionary 列表，按当前词典的可选 `stylesheetUrl` 动态加载或卸载 stylesheet，再向指定 dictionary 发起 exact 或 prefix 搜索。
 6. Fastify 校验请求并调用 `DictionaryQueryService`；服务通过 Prisma 执行显式字段查询。
 7. React 展示搜索 DTO 的纯文本预览；点击结果后获取 detail DTO，并渲染后端保存的 `sanitizedHtml`。
 8. 收藏操作通过 `VocabularyService` 将 `VocabularyItem` 关联到具体 `DictionaryEntry`；浏览器刷新后从 PostgreSQL 恢复收藏列表。
@@ -62,7 +64,7 @@ MDX
 
 | 路径 | 职责 |
 | --- | --- |
-| `prisma/schema.prisma` | Dictionary、DictionaryEntry、ImportJob schema、枚举和索引。 |
+| `prisma/schema.prisma` | Dictionary（包括可选 stylesheet URL）、DictionaryEntry、VocabularyItem、ImportJob schema、枚举和索引。 |
 | `src/cli/import-mdx.ts` | 本地 MDX 导入命令；保存文件、创建 job、启动指定 job worker、输出摘要。 |
 | `src/worker.ts` | Claim queued job 并调用 importer；队列为空后退出。 |
 | `src/importer/mdx-importer.ts` | 导入状态、批处理、内容转换和失败记录。 |
@@ -146,11 +148,17 @@ npm run db:migrate
 npm run import-mdx -- /absolute/or/relative/dictionary.mdx
 ```
 
+如果 dictionary stylesheet 已随 Web 静态文件发布，可以在导入时声明其 root-relative URL：
+
+```bash
+npm run import-mdx -- /absolute/or/relative/dictionary.mdx --stylesheet-url /dictionaries/dictionary-name/style.css
+```
+
 该命令会：
 
 1. 验证扩展名和可读性。
 2. 将文件复制到 `APP_DATA_DIR`，使用 UUID 作为 storage key。
-3. 创建 queued dictionary 和 import job。
+3. 创建 queued dictionary（包括可选 stylesheet URL）和 import job。
 4. 启动一个 worker 处理该 job，并等待完成。
 5. 输出 dictionary 状态、MDX version、encoding、entry 数、redirect 数量和耗时。
 
@@ -180,7 +188,7 @@ http://127.0.0.1:3000
 
 | Method | Path | 说明 |
 | --- | --- | --- |
-| GET | `/api/dictionaries` | 按 `importedAt DESC` 列出 ready dictionaries。 |
+| GET | `/api/dictionaries` | 按 `importedAt DESC` 列出 ready dictionaries，包括可选 `stylesheetUrl`。 |
 | GET | `/api/dictionaries/:dictionaryId/search` | 搜索指定 ready dictionary；支持 `q`、`mode`、`limit`、`offset`。 |
 | GET | `/api/entries/:entryId` | 获取 entry detail 和 sanitized HTML。 |
 | GET | `/api/vocabulary` | 按添加时间倒序列出收藏及其安全 entry 摘要。 |
@@ -226,9 +234,13 @@ http://127.0.0.1:5173
 
 `web/vite.config.ts` 将 `/api` 转发到 `http://127.0.0.1:3000`。前端源代码始终请求相对 `/api/...` URL，不依赖固定 backend host 或 port。
 
-页面会在输入停止约 250ms 后通过现有 prefix API 获取最多 10 个候选词。点击候选，或使用方向键选择后按 Enter，会直接加载完整词条；Escape 可以关闭候选列表。
+Dictionary stylesheet 由 `/api/dictionaries` 返回的 `stylesheetUrl` 驱动，只在显示对应词典时挂载。当前 Oxford 8 指向 `/dictionaries/oxford8/O8C.css`；静态文件随 Vite build 发布。该机制只负责 CSS，不提供 MDD、图片、字体或音频资源解析。
 
-词条详情中的 **Add to Vocabulary** 会将具体 entry 收藏到 PostgreSQL。已收藏词条显示 **Added to Vocabulary** 且不能重复点击。页面下方 Vocabulary Book 显示 headword 和添加时间；点击 headword 会重新获取完整详情，Remove 成功后会立即从列表移除。
+页面会在输入停止约 250ms 后通过现有 prefix API 获取最多 30 个原始候选，再过滤 `sb` 模板、去重，并优先展示独立词头、用 `sth` 短语候选补足，最终最多展示 10 个有效候选。点击候选，或使用方向键选择后按 Enter，会直接加载完整词条；Escape 可以关闭候选列表。
+
+顶部 navigation 在独立的 **Dictionary** 和 **Vocabulary Book** views 间切换，不使用客户端路由。Entry Detail 默认展开完整正文；**Collapse** 会保留约 220px 的正文预览和底部渐隐，**Expand** 恢复完整内容，选择新词条时会重新展开。
+
+词条详情中的 **Add to Vocabulary** 会将具体 entry 收藏到 PostgreSQL。已收藏词条显示 **Added to Vocabulary** 且不能重复点击。Vocabulary Book 显示 headword 和添加时间；点击 headword 会切回 Dictionary view、重新获取并展开完整详情，Remove 成功后会立即从列表移除。
 
 数据库中的 `VocabularyItem` 只保存 `id`、唯一的 `entryId` 和 `createdAt`，通过 relation 读取 headword、dictionary 等 entry 数据，不重复存储这些字段。删除 DictionaryEntry 时关联收藏由外键级联删除。
 

@@ -16,6 +16,7 @@ export interface DictionaryListItemDTO {
   mdxFormatVersion: string | null;
   sourceEncoding: string | null;
   importedAt: string | null;
+  stylesheetUrl: string | null;
 }
 
 interface SearchParams { dictionaryId: string }
@@ -42,13 +43,14 @@ const errorSchema = {
 } as const;
 const dictionarySchema = {
   type: 'object',
-  required: ['id', 'name', 'entryCount', 'mdxFormatVersion', 'sourceEncoding', 'importedAt'],
+  required: ['id', 'name', 'entryCount', 'mdxFormatVersion', 'sourceEncoding', 'importedAt', 'stylesheetUrl'],
   properties: {
     id: { type: 'string', format: 'uuid' }, name: { type: 'string' },
     entryCount: { type: 'integer', nullable: true },
     mdxFormatVersion: { type: 'string', nullable: true },
     sourceEncoding: { type: 'string', nullable: true },
     importedAt: { type: 'string', format: 'date-time', nullable: true },
+    stylesheetUrl: { type: 'string', nullable: true },
   },
 } as const;
 const searchEntrySchema = {
@@ -138,7 +140,7 @@ export async function createApiServer(database: PrismaClient): Promise<FastifyIn
       where: { status: 'ready' }, orderBy: { importedAt: 'desc' },
       select: {
         id: true, name: true, entryCount: true, mdxFormatVersion: true,
-        sourceEncoding: true, importedAt: true,
+        sourceEncoding: true, importedAt: true, stylesheetUrl: true,
       },
     });
     const items: DictionaryListItemDTO[] = dictionaries.map((dictionary) => ({

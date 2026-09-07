@@ -13,7 +13,7 @@ describe('HTTP API → DictionaryQueryService → PostgreSQL', () => {
 
   beforeAll(async () => {
     const apple = await prisma.dictionaryEntry.findFirst({
-      where: { headwordNormalized: 'apple', dictionary: { status: 'ready' } },
+      where: { headwordNormalized: 'apple', dictionary: { status: 'ready', entryCount: 92667 } },
       select: { id: true, dictionaryId: true },
     });
     if (!apple) throw new Error('Integration database must contain "apple" in a ready dictionary');
@@ -96,12 +96,15 @@ describe('HTTP API → DictionaryQueryService → PostgreSQL', () => {
         'mdxFormatVersion',
         'sourceEncoding',
         'importedAt',
+        'stylesheetUrl',
       ]);
       expect(item).not.toHaveProperty('storageKey');
       expect(item).not.toHaveProperty('fileChecksum');
       expect(item).not.toHaveProperty('headerMetadata');
       expect(item).not.toHaveProperty('failureSummary');
     }
+    expect(body.items.find((item: { id: string }) => item.id === dictionaryId).stylesheetUrl)
+      .toBe('/dictionaries/oxford8/O8C.css');
   });
 
   it('returns exact apple with pagination metadata', async () => {

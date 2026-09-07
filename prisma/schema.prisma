@@ -44,6 +44,7 @@ model Dictionary {
   failureSummary   String?           @map("failure_summary")
   createdAt        DateTime          @default(now()) @map("created_at")
   importedAt       DateTime?         @map("imported_at")
+  stylesheetUrl    String?           @map("stylesheet_url")
   entries          DictionaryEntry[]
   importJobs       ImportJob[]
 

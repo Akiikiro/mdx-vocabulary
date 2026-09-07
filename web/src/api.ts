@@ -5,6 +5,7 @@ export interface Dictionary {
   mdxFormatVersion: string | null;
   sourceEncoding: string | null;
   importedAt: string | null;
+  stylesheetUrl: string | null;
 }
 
 export interface SearchEntry {
