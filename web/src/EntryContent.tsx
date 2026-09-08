@@ -23,7 +23,6 @@ export function EntryContent({ dictionaryId, sanitizedHtml, expanded }: EntryCon
     let currentAudio: HTMLAudioElement | null = null;
     let currentButton: HTMLButtonElement | null = null;
     let disposed = false;
-    const cleanups: Array<() => void> = [];
 
     const resetButton = (button: HTMLButtonElement) => {
       button.classList.remove('loading', 'playing', 'failed');
@@ -44,12 +43,59 @@ export function EntryContent({ dictionaryId, sanitizedHtml, expanded }: EntryCon
       currentButton = null;
     };
 
+    const play = async (button: HTMLButtonElement) => {
+      const logicalPath = button.dataset.mdictResource ?? '';
+      const url = resourceUrl(dictionaryId, logicalPath);
+      if (!url) return;
+
+      stopCurrent();
+      if (disposed) return;
+
+      const audio = new Audio(url);
+      currentAudio = audio;
+      currentButton = button;
+      button.classList.add('loading');
+      button.textContent = '…';
+      button.setAttribute('aria-label', 'Loading pronunciation');
+
+      audio.onplaying = () => {
+        if (disposed || currentAudio !== audio) return;
+        button.classList.remove('loading');
+        button.classList.add('playing');
+        button.textContent = '🔊';
+        button.setAttribute('aria-label', 'Replay pronunciation');
+      };
+      audio.onended = () => {
+        if (currentAudio === audio) stopCurrent();
+      };
+      audio.onerror = () => {
+        if (disposed || currentAudio !== audio) return;
+        stopCurrent();
+        button.classList.add('failed');
+        button.textContent = '🔇';
+        button.setAttribute('aria-label', 'Pronunciation failed to load');
+        button.title = 'Pronunciation failed to load';
+      };
+
+      try {
+        await audio.play();
+      } catch {
+        if (disposed || currentAudio !== audio) return;
+        stopCurrent();
+        button.classList.add('failed');
+        button.textContent = '🔇';
+        button.setAttribute('aria-label', 'Pronunciation playback failed');
+        button.title = 'Pronunciation playback failed';
+      }
+    };
+
     for (const marker of container.querySelectorAll<HTMLElement>('span[data-mdict-kind="sound"][data-mdict-resource]')) {
       const logicalPath = marker.dataset.mdictResource ?? '';
       const url = resourceUrl(dictionaryId, logicalPath);
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'pronunciation-button';
+      button.dataset.mdictResource = logicalPath;
       resetButton(button);
 
       if (!url) {
@@ -58,59 +104,23 @@ export function EntryContent({ dictionaryId, sanitizedHtml, expanded }: EntryCon
         button.textContent = '🔇';
         button.setAttribute('aria-label', 'Pronunciation unavailable');
         button.title = 'Pronunciation unavailable';
-      } else {
-        const play = async () => {
-          stopCurrent();
-          if (disposed) return;
-
-          const audio = new Audio(url);
-          currentAudio = audio;
-          currentButton = button;
-          button.classList.add('loading');
-          button.textContent = '…';
-          button.setAttribute('aria-label', 'Loading pronunciation');
-
-          audio.onplaying = () => {
-            if (disposed || currentAudio !== audio) return;
-            button.classList.remove('loading');
-            button.classList.add('playing');
-            button.textContent = '🔊';
-            button.setAttribute('aria-label', 'Replay pronunciation');
-          };
-          audio.onended = () => {
-            if (currentAudio === audio) stopCurrent();
-          };
-          audio.onerror = () => {
-            if (disposed || currentAudio !== audio) return;
-            stopCurrent();
-            button.classList.add('failed');
-            button.textContent = '🔇';
-            button.setAttribute('aria-label', 'Pronunciation failed to load');
-            button.title = 'Pronunciation failed to load';
-          };
-
-          try {
-            await audio.play();
-          } catch {
-            if (disposed || currentAudio !== audio) return;
-            stopCurrent();
-            button.classList.add('failed');
-            button.textContent = '🔇';
-            button.setAttribute('aria-label', 'Pronunciation playback failed');
-            button.title = 'Pronunciation playback failed';
-          }
-        };
-        button.addEventListener('click', play);
-        cleanups.push(() => button.removeEventListener('click', play));
       }
 
       marker.replaceWith(button);
     }
 
+    const handleClick = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const button = target.closest<HTMLButtonElement>('.pronunciation-button');
+      if (button && container.contains(button) && !button.disabled) void play(button);
+    };
+    container.addEventListener('click', handleClick);
+
     return () => {
       disposed = true;
+      container.removeEventListener('click', handleClick);
       stopCurrent();
-      for (const cleanup of cleanups) cleanup();
     };
   }, [dictionaryId, sanitizedHtml]);
 
