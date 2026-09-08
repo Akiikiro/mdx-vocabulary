@@ -14,6 +14,7 @@ import {
   type VocabularyItem,
 } from './api';
 import { dictionaryStylesheetUrls } from './dictionary-stylesheets';
+import { EntryContent } from './EntryContent';
 
 const AUTOCOMPLETE_DELAY_MS = 250;
 const AUTOCOMPLETE_CANDIDATE_LIMIT = 30;
@@ -439,10 +440,10 @@ export function App() {
               </div>
             </div>
             {detail.redirectTarget && <p className="redirect-detail">Redirected from this entry to {detail.redirectTarget}</p>}
-            <div
-              id="dictionary-entry-content"
-              className={`dictionary-entry${detailExpanded ? '' : ' collapsed'}`}
-              dangerouslySetInnerHTML={{ __html: detail.sanitizedHtml }}
+            <EntryContent
+              dictionaryId={detail.dictionaryId}
+              sanitizedHtml={detail.sanitizedHtml}
+              expanded={detailExpanded}
             />
           </article>
         )}

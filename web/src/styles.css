@@ -73,6 +73,26 @@ h2 { margin: 0 0 18px; font-size: 1.05rem; }
 .dictionary-entry .x-g, .dictionary-entry .def-g { display: block; margin: 7px 0; }
 .dictionary-entry .pos { color: #8d3b2e; font-style: italic; }
 .dictionary-entry a { color: #176448; }
+.pronunciation-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.75rem;
+  min-height: 1.75rem;
+  margin: 0 .16rem;
+  padding: .12rem .3rem;
+  border: 1px solid #b7c9c0;
+  border-radius: 999px;
+  background: #edf6f1;
+  color: #176448;
+  line-height: 1;
+  vertical-align: middle;
+  cursor: pointer;
+}
+.pronunciation-button:hover, .pronunciation-button:focus-visible { border-color: #176448; background: #dfeee7; }
+.pronunciation-button.playing { border-color: #176448; box-shadow: 0 0 0 3px rgb(23 100 72 / 13%); }
+.pronunciation-button.loading { cursor: progress; }
+.pronunciation-button.failed { border-color: #d4c9c6; background: #f4f1ef; color: #8d5f57; cursor: not-allowed; }
 .redirect-detail { padding: 9px 12px; border-radius: 7px; background: #fff4de; color: #704912; }
 .placeholder, .status, .empty-state { color: #758078; }
 .error { margin: 18px 0 0; padding: 11px 13px; border-radius: 7px; background: #fff0ee; color: #9a2d20; }

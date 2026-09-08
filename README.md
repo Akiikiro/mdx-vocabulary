@@ -59,8 +59,9 @@ MDX
 4. 词条按 `IMPORT_BATCH_SIZE` 批量写入 PostgreSQL；成功后 dictionary 变为 `ready`。
 5. 浏览器先请求 ready dictionary 列表，按当前词典的可选 `stylesheetUrl` 动态加载或卸载 stylesheet，再向指定 dictionary 发起 exact 或 prefix 搜索。
 6. Fastify 校验请求并调用 `DictionaryQueryService`；服务通过 Prisma 执行显式字段查询。
-7. React 展示搜索 DTO 的纯文本预览；点击结果后获取 detail DTO，并渲染后端保存的 `sanitizedHtml`。
-8. 收藏操作通过 `VocabularyService` 将 `VocabularyItem` 关联到具体 `DictionaryEntry`；浏览器刷新后从 PostgreSQL 恢复收藏列表。
+7. Entry detail 中经过后端验证的 sound markers 会由前端增强为轻量播放按钮，并通过 dictionary-scoped MDD resource API 播放原始音频；任一时刻只播放一个发音。
+8. React 展示搜索 DTO 的纯文本预览；点击结果后获取 detail DTO，并渲染后端保存的 `sanitizedHtml`。
+9. 收藏操作通过 `VocabularyService` 将 `VocabularyItem` 关联到具体 `DictionaryEntry`；浏览器刷新后从 PostgreSQL 恢复收藏列表。
 
 ### Dictionary package import
 
