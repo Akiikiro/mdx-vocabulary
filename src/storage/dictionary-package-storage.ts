@@ -95,6 +95,19 @@ export class DictionaryPackageStorage {
     return this.resolveStorageKey(storageKey);
   }
 
+  async mddVolumePaths(packageStorageKey: string): Promise<string[]> {
+    const resourcesRoot = this.resolveStorageKey(path.posix.join(packageStorageKey, 'resources'));
+    const relativePaths: string[] = [];
+    try {
+      await collectMddPaths(resourcesRoot, '', relativePaths);
+    } catch (error) {
+      if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') return [];
+      throw error;
+    }
+    relativePaths.sort(compareMddVolumePaths);
+    return relativePaths.map((relativePath) => path.join(resourcesRoot, ...relativePath.split('/')));
+  }
+
   private resolveStorageKey(storageKey: string): string {
     const safeKey = validatePackagePath(storageKey);
     const resolved = path.resolve(this.rootDirectory, ...safeKey.split('/'));
@@ -102,6 +115,26 @@ export class DictionaryPackageStorage {
     if (!resolved.startsWith(root)) throw new InvalidPackagePathError('Package path escapes storage root');
     return resolved;
   }
+}
+
+async function collectMddPaths(root: string, relativeDirectory: string, output: string[]): Promise<void> {
+  const directory = path.join(root, ...relativeDirectory.split('/').filter(Boolean));
+  const entries = await fsp.readdir(directory, { withFileTypes: true });
+  for (const entry of entries) {
+    const relativePath = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) await collectMddPaths(root, relativePath, output);
+    else if (entry.isFile() && entry.name.toLowerCase().endsWith('.mdd')) output.push(relativePath);
+  }
+}
+
+function compareMddVolumePaths(left: string, right: string): number {
+  const parse = (value: string) => {
+    const match = /^(.*?)(?:\.(\d+))?\.mdd$/iu.exec(value);
+    return { stem: match?.[1] ?? value, volume: match?.[2] === undefined ? 0 : Number(match[2]) + 1 };
+  };
+  const a = parse(left);
+  const b = parse(right);
+  return a.stem.localeCompare(b.stem, 'en', { sensitivity: 'variant' }) || a.volume - b.volume || left.localeCompare(right);
 }
 
 export function validatePackagePath(value: string): string {

@@ -80,7 +80,7 @@ APP_DATA_DIR/
         └── <other package files>
 ```
 
-Phase 1 不解包 MDD，也不提供图片、声音或其他 resource lookup。Asset route 只允许读取该 dictionary 自动绑定的 CSS。
+MDD resource foundation 按 dictionary scope 枚举 package 中的 MDD 分卷，依次执行精确 key lookup，并通过通用 resource API 返回解码后的原始 bytes。逻辑资源路径保持大小写和 Unicode，不解释 `audio`、`images` 或语言目录等路径段。MDD 不会整包解压；stylesheet asset route 仍只允许读取该 dictionary 自动绑定的 CSS。
 
 ## 主要模块
 
@@ -92,6 +92,7 @@ Phase 1 不解包 MDD，也不提供图片、声音或其他 resource lookup。A
 | `src/importer/mdx-importer.ts` | 导入状态、批处理、内容转换和失败记录。 |
 | `src/importer/dictionary-package-import-service.ts` | Package 分类验证、dictionary-owned layout 提交及 Dictionary/ImportJob 创建。 |
 | `src/mdx/` | Parser 接口以及基于 `js-mdict` 的实现。 |
+| `src/resources/` | 逻辑 resource path 校验/MDD key 转换、dictionary-scoped 分卷查询及保守的 bytes content-type 检测。 |
 | `src/storage/` | MDX 文件存储接口和本地目录实现。 |
 | `src/storage/dictionary-package-storage.ts` | Multipart staging、安全路径校验、dictionary package 原子存储和 CSS asset 定位。 |
 | `src/dictionary-stylesheets/` | Stylesheet fingerprint/profile 检测，以及已有 package metadata 的幂等 reconciliation。 |
@@ -216,7 +217,8 @@ http://127.0.0.1:3000
 | GET | `/api/dictionaries` | 按 `importedAt DESC` 列出 ready dictionaries，包括可选 `stylesheetUrl`。 |
 | POST | `/api/dictionaries/import` | 接受多文件 `multipart/form-data` package，验证并排队导入，返回 202。 |
 | GET | `/api/dictionaries/:dictionaryId/import-status` | 返回 queued/importing/ready/failed 和导入进度。 |
-| GET | `/api/dictionaries/:dictionaryId/assets/styles/:file.css` | 读取该 dictionary 自动绑定的 CSS；不提供其他 package resources。 |
+| GET | `/api/dictionaries/:dictionaryId/assets/styles/:file.css` | 读取该 dictionary 自动绑定的 CSS asset。 |
+| GET | `/api/dictionaries/:dictionaryId/resources/*` | 按大小写敏感的 Unicode 逻辑路径精确读取该 dictionary 的 MDD resource bytes。 |
 | GET | `/api/dictionaries/:dictionaryId/search` | 搜索指定 ready dictionary；支持 `q`、`mode`、`limit`、`offset`。 |
 | GET | `/api/entries/:entryId` | 获取 entry detail 和 sanitized HTML。 |
 | GET | `/api/vocabulary` | 按添加时间倒序列出收藏及其安全 entry 摘要。 |

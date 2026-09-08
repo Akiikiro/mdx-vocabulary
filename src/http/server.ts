@@ -12,6 +12,9 @@ import {
   DictionaryPackageValidationError,
 } from '../importer/dictionary-package-import-service.js';
 import { DictionaryQueryService } from '../query/dictionary-query-service.js';
+import { JsMddResourceAdapter, type MddResourceAdapter } from '../mdx/mdd-resource-adapter.js';
+import { DictionaryResourceService } from '../resources/dictionary-resource-service.js';
+import { InvalidLogicalResourcePathError } from '../resources/logical-resource-path.js';
 import {
   DictionaryPackageStorage,
   InvalidPackagePathError,
@@ -44,6 +47,7 @@ interface DictionaryAssetParams extends DictionaryParams { '*': string }
 export interface ApiServerOptions {
   startImportJob?: (jobId: string) => void | Promise<void>;
   packageStorage?: DictionaryPackageStorage;
+  mddResourceAdapter?: MddResourceAdapter;
 }
 
 class HttpError extends Error {
@@ -122,23 +126,42 @@ export async function createApiServer(database: PrismaClient, options: ApiServer
   const queryService = new DictionaryQueryService(database);
   const vocabularyService = new VocabularyService(database);
   const packageStorage = options.packageStorage ?? new DictionaryPackageStorage(config.dataDir);
+  const mddResourceAdapter = options.mddResourceAdapter ?? new JsMddResourceAdapter();
+  const resourceService = new DictionaryResourceService(database, packageStorage, mddResourceAdapter);
+  app.addHook('onClose', async () => { mddResourceAdapter.close?.(); });
   const packageImportService = new DictionaryPackageImportService(database, packageStorage);
   await new DictionaryStylesheetCompatibilityService(database, packageStorage).reconcileStoredPackages();
   const startImportJob = options.startImportJob ?? startWorkerProcess;
 
   await app.register(swagger, {
-    transform: ({ schema, url }) => ({
-      schema: url === '/api/dictionaries/import'
-        ? { ...schema, body: dictionaryPackageUploadSchema }
-        : schema,
-      url,
-    }),
+    transform: ({ schema, url }) => {
+      if (url === '/api/dictionaries/import') {
+        return { schema: { ...schema, body: dictionaryPackageUploadSchema }, url };
+      }
+      if (url === '/api/dictionaries/:dictionaryId/resources/*') {
+        return {
+          schema: {
+            ...schema,
+            response: {
+              ...((schema.response ?? {}) as Record<string, unknown>),
+              200: {
+                description: 'Decoded bytes stored in the MDD resource; the response Content-Type is detected from its bytes',
+                content: { 'application/octet-stream': { schema: { type: 'string', format: 'binary' } } },
+              },
+            },
+          } as typeof schema,
+          url,
+        };
+      }
+      return { schema, url };
+    },
     openapi: {
       openapi: '3.0.3',
       info: { title: 'MDX Vocabulary API', version: '0.1.0' },
       tags: [
         { name: 'dictionaries', description: 'Ready dictionaries and entry search' },
         { name: 'entries', description: 'Dictionary entry details' },
+        { name: 'resources', description: 'Dictionary-scoped MDD binary resources' },
         { name: 'vocabulary', description: 'Local vocabulary book' },
       ],
     },
@@ -343,6 +366,35 @@ export async function createApiServer(database: PrismaClient, options: ApiServer
     } catch (error) {
       if (error instanceof InvalidPackagePathError || (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT')) {
         throw new HttpError(404, 'DICTIONARY_ASSET_NOT_FOUND', 'Dictionary asset not found');
+      }
+      throw error;
+    }
+  });
+
+  app.get<{ Params: DictionaryAssetParams }>('/api/dictionaries/:dictionaryId/resources/*', {
+    schema: {
+      operationId: 'getDictionaryResource', summary: 'Get an exact dictionary MDD resource', tags: ['resources'],
+      params: {
+        type: 'object', required: ['dictionaryId', '*'],
+        properties: {
+          dictionaryId: { type: 'string', format: 'uuid' },
+          '*': { type: 'string', minLength: 1, description: 'Case-sensitive, Unicode logical resource path' },
+        },
+      },
+      response: {
+        200: { type: 'string', format: 'binary', description: 'Decoded bytes stored in the MDD resource' },
+        400: errorSchema, 404: errorSchema, 500: errorSchema,
+      },
+    },
+  }, async (request, reply) => {
+    const dictionaryId = requireUuid(request.params.dictionaryId, 'dictionaryId');
+    try {
+      const resource = await resourceService.getResource(dictionaryId, request.params['*']);
+      if (!resource) throw new HttpError(404, 'DICTIONARY_RESOURCE_NOT_FOUND', 'Dictionary resource not found');
+      return reply.header('Cache-Control', 'private, max-age=3600').type(resource.contentType).send(resource.bytes);
+    } catch (error) {
+      if (error instanceof InvalidLogicalResourcePathError) {
+        throw new HttpError(400, 'INVALID_RESOURCE_PATH', error.message);
       }
       throw error;
     }
