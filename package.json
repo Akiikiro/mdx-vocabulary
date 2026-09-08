@@ -9,6 +9,7 @@
     "db:migrate": "prisma migrate dev",
     "worker": "tsx src/worker.ts",
     "import-mdx": "tsx src/cli/import-mdx.ts",
+    "reprocess-entries": "tsx src/cli/reprocess-entries.ts",
     "test": "vitest run"
   },
   "dependencies": {

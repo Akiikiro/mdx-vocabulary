@@ -88,6 +88,7 @@ MDD resource foundation 按 dictionary scope 枚举 package 中的 MDD 分卷，
 | --- | --- |
 | `prisma/schema.prisma` | Dictionary（包括可选 stylesheet URL 和 compatibility profile）、DictionaryEntry、VocabularyItem、ImportJob schema、枚举和索引。 |
 | `src/cli/import-mdx.ts` | 本地 MDX 导入命令；保存文件、创建 job、启动指定 job worker、输出摘要。 |
+| `src/cli/reprocess-entries.ts` | 对显式指定 dictionary 执行 marker-aware entry dry-run 或原地批量重处理。 |
 | `src/worker.ts` | Claim queued job 并调用 importer；队列为空后退出。 |
 | `src/importer/mdx-importer.ts` | 导入状态、批处理、内容转换和失败记录。 |
 | `src/importer/dictionary-package-import-service.ts` | Package 分类验证、dictionary-owned layout 提交及 Dictionary/ImportJob 创建。 |
@@ -99,6 +100,7 @@ MDD resource foundation 按 dictionary scope 枚举 package 中的 MDD 分卷，
 | `src/jobs/` | PostgreSQL job queue、进度和状态定义。 |
 | `src/entries/` | Headword normalization、sort key、redirect 检测、HTML sanitization、纯文本提取。 |
 | `src/entries/mdict-references.ts` | 校验 MDict sound、image/resource、internal-entry references 并生成 dictionary-independent inert markers，同时阻止 raw HTML 伪造 marker。 |
+| `src/entries/dictionary-entry-reprocessing-service.ts` | 从 `entryRaw` 以稳定游标分批重建 sanitized HTML/plain text，并提供 dry-run、进度和失败摘要。 |
 | `src/query/dictionary-query-service.ts` | Exact、prefix、entry detail 查询和一跳 redirect 解析。 |
 | `src/vocabulary/vocabulary-service.ts` | VocabularyItem 添加、列表、去重和移除业务逻辑及公开 DTO。 |
 | `src/http/server.ts` | Fastify 实例、REST routes、validation、error responses、Swagger。 |
@@ -196,6 +198,23 @@ npm run worker
 ```
 
 当前 worker 在队列为空后退出，不是常驻服务。项目目前只有 CLI 导入，没有 HTTP upload API。
+
+## 重处理已有 entries
+
+Marker-aware HTML pipeline 更新后，可以显式选择一个 dictionary，从既有 `entryRaw` 重新计算 sanitized HTML 和 plain text。命令默认是无写入 dry-run：
+
+```bash
+npm run reprocess-entries -- <dictionaryId>
+npm run reprocess-entries -- <dictionaryId> --dry-run --batch-size=500
+```
+
+检查 dry-run 摘要和失败记录后，只有明确传入 `--apply` 才会原地更新：
+
+```bash
+npm run reprocess-entries -- <dictionaryId> --apply --batch-size=500
+```
+
+处理以 `(dictionaryId, sourceOrdinal)` 稳定游标分页，每批使用短事务同时更新 `entrySanitizedHtml` 和 `entryPlainText`。它不会删除或重建 entry，因此 entry ID、source ordinal 和 vocabulary relations 保持不变；redirect 的 HTML/plain text 保持为空。该命令不会自动处理其他 dictionaries，也不会在 API 启动时运行。
 
 ## 启动 Fastify backend
 
