@@ -55,7 +55,7 @@ MDX
 
 1. 浏览器 package import 或 `import-mdx` CLI 将源 MDX 保存到 `APP_DATA_DIR`，创建 dictionary 和 queued import job。
 2. Worker claim job，通过 `JsMdictAdapter` 检查文件 metadata 并迭代词条。
-3. Importer 清除 PostgreSQL 不接受的 NUL 字符，标准化 headword，生成 sort key，识别 redirect，清洗 HTML，并提取纯文本。
+3. Importer 清除 PostgreSQL 不接受的 NUL 字符，标准化 headword，生成 sort key，识别 redirect；对新导入的 definition，先将合法 MDict internal references 转换为不含 dictionary UUID/HTTP URL 的 inert typed markers，再严格清洗 HTML 并提取纯文本。已有 rows 不会在启动时自动重处理。
 4. 词条按 `IMPORT_BATCH_SIZE` 批量写入 PostgreSQL；成功后 dictionary 变为 `ready`。
 5. 浏览器先请求 ready dictionary 列表，按当前词典的可选 `stylesheetUrl` 动态加载或卸载 stylesheet，再向指定 dictionary 发起 exact 或 prefix 搜索。
 6. Fastify 校验请求并调用 `DictionaryQueryService`；服务通过 Prisma 执行显式字段查询。
@@ -98,6 +98,7 @@ MDD resource foundation 按 dictionary scope 枚举 package 中的 MDD 分卷，
 | `src/dictionary-stylesheets/` | Stylesheet fingerprint/profile 检测，以及已有 package metadata 的幂等 reconciliation。 |
 | `src/jobs/` | PostgreSQL job queue、进度和状态定义。 |
 | `src/entries/` | Headword normalization、sort key、redirect 检测、HTML sanitization、纯文本提取。 |
+| `src/entries/mdict-references.ts` | 校验 MDict sound、image/resource、internal-entry references 并生成 dictionary-independent inert markers，同时阻止 raw HTML 伪造 marker。 |
 | `src/query/dictionary-query-service.ts` | Exact、prefix、entry detail 查询和一跳 redirect 解析。 |
 | `src/vocabulary/vocabulary-service.ts` | VocabularyItem 添加、列表、去重和移除业务逻辑及公开 DTO。 |
 | `src/http/server.ts` | Fastify 实例、REST routes、validation、error responses、Swagger。 |
