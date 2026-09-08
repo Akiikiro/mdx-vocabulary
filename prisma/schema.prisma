@@ -66,6 +66,12 @@ model DictionaryEntry {
   entryKind              EntryKind       @default(definition) @map("entry_kind")
   redirectTargetOriginal String?         @map("redirect_target_original")
   sourceOrdinal          Int             @map("source_ordinal")
+  mdxLocatorVersion      Int?            @map("mdx_locator_version")
+  mdxLocatorFileChecksum String?          @map("mdx_locator_file_checksum")
+  mdxLocatorKeyText      String?          @map("mdx_locator_key_text")
+  mdxLocatorKeyBlockIndex Int?            @map("mdx_locator_key_block_index")
+  mdxLocatorRecordStartOffset BigInt?     @map("mdx_locator_record_start_offset")
+  mdxLocatorRecordEndOffset BigInt?       @map("mdx_locator_record_end_offset")
   createdAt              DateTime        @default(now()) @map("created_at")
   dictionary             Dictionary      @relation(fields: [dictionaryId], references: [id], onDelete: Cascade)
   vocabularyItem         VocabularyItem?

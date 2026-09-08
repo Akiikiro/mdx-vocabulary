@@ -86,13 +86,16 @@ MDD resource foundation 按 dictionary scope 枚举 package 中的 MDD 分卷，
 
 | 路径 | 职责 |
 | --- | --- |
-| `prisma/schema.prisma` | Dictionary（包括可选 stylesheet URL 和 compatibility profile）、DictionaryEntry、VocabularyItem、ImportJob schema、枚举和索引。 |
+| `prisma/schema.prisma` | Dictionary、DictionaryEntry（包括 nullable、versioned MDX physical locator）、VocabularyItem、ImportJob schema、枚举和索引。 |
 | `src/cli/import-mdx.ts` | 本地 MDX 导入命令；保存文件、创建 job、启动指定 job worker、输出摘要。 |
 | `src/cli/reprocess-entries.ts` | 对显式指定 dictionary 执行 marker-aware entry dry-run 或原地批量重处理。 |
+| `src/cli/backfill-mdx-locators.ts` | 对显式指定 dictionary 校验并 dry-run/apply 持久化 MDX locator；默认不写入。 |
 | `src/worker.ts` | Claim queued job 并调用 importer；队列为空后退出。 |
 | `src/importer/mdx-importer.ts` | 导入状态、批处理、内容转换和失败记录。 |
 | `src/importer/dictionary-package-import-service.ts` | Package 分类验证、dictionary-owned layout 提交及 Dictionary/ImportJob 创建。 |
 | `src/mdx/` | Parser 接口以及基于 `js-mdict` 的实现。 |
+| `src/mdx/lazy-mdx-adapter.ts` | Hybrid POC：以 MDX checksum 和物理 record offsets 为边界构造 application-owned locator，并通过 bounded process-local parser lifecycle 精确 lazy fetch。 |
+| `src/mdx/mdx-locator-persistence.ts` | Prisma nullable locator columns 与 application-owned `MdxEntryLocator` 的严格转换和 partial-state 拒绝。 |
 | `src/resources/` | 逻辑 resource path 校验/MDD key 转换、dictionary-scoped 分卷查询及保守的 bytes content-type 检测。 |
 | `src/storage/` | MDX 文件存储接口和本地目录实现。 |
 | `src/storage/dictionary-package-storage.ts` | Multipart staging、安全路径校验、dictionary package 原子存储和 CSS asset 定位。 |
@@ -103,6 +106,7 @@ MDD resource foundation 按 dictionary scope 枚举 package 中的 MDD 分卷，
 | `src/entries/dictionary-entry-reprocessing-service.ts` | 从 `entryRaw` 以稳定游标分批重建 sanitized HTML/plain text，并提供 dry-run、进度和失败摘要。 |
 | `src/query/dictionary-query-service.ts` | Exact、prefix、entry detail 查询和一跳 redirect 解析。 |
 | `src/vocabulary/vocabulary-service.ts` | VocabularyItem 添加、列表、去重和移除业务逻辑及公开 DTO。 |
+| `src/query/lazy-dictionary-detail-poc-service.ts` | 非默认 Hybrid POC path；只读验证现有 entry UUID 到 MDX locator 的映射，并执行 lazy transform/sanitize，不注册公开 route。 |
 | `src/http/server.ts` | Fastify 实例、REST routes、validation、error responses、Swagger。 |
 | `src/api.ts` | Fastify 进程启动和优雅关闭入口。 |
 | `web/src/api.ts` | 浏览器端相对路径 API client 和 DTO 类型。 |
@@ -215,6 +219,23 @@ npm run reprocess-entries -- <dictionaryId> --apply --batch-size=500
 ```
 
 处理以 `(dictionaryId, sourceOrdinal)` 稳定游标分页，每批使用短事务同时更新 `entrySanitizedHtml` 和 `entryPlainText`。它不会删除或重建 entry，因此 entry ID、source ordinal 和 vocabulary relations 保持不变；redirect 的 HTML/plain text 保持为空。该命令不会自动处理其他 dictionaries，也不会在 API 启动时运行。
+
+## 持久化 MDX locators
+
+Hybrid locator backfill 将现有 entry 临时通过 `sourceOrdinal` 与不可变 MDX key list 对齐，并在验证 checksum、headword、raw definition、entry kind 和 redirect 后，仅填写 nullable locator columns。默认及 `--dry-run` 均执行零写入：
+
+```bash
+npm run backfill-mdx-locators -- <dictionaryId>
+npm run backfill-mdx-locators -- <dictionaryId> --dry-run --batch-size=500
+```
+
+只有显式 apply 才会更新 locator fields；不会修改现有 definition content 或 vocabulary relations：
+
+```bash
+npm run backfill-mdx-locators -- <dictionaryId> --apply --batch-size=500
+```
+
+完整且验证一致的 locator 会被跳过，因此命令可重启；部分填写、checksum 不一致或 MDX identity 不一致均失败关闭。当前 public detail API 仍读取 PostgreSQL 中的既有 sanitized content。
 
 ## 启动 Fastify backend
 
