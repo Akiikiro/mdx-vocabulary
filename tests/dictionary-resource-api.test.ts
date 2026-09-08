@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { MddResourceAdapter } from '../src/mdx/mdd-resource-adapter.js';
 import { createApiServer } from '../src/http/server.js';
 import { DictionaryPackageStorage } from '../src/storage/dictionary-package-storage.js';
+import { PronunciationAudioError } from '../src/resources/pronunciation-audio-service.js';
 
 describe('dictionary resource HTTP API', () => {
   const dictionaryA = '11111111-1111-4111-8111-111111111111';
@@ -39,6 +40,16 @@ describe('dictionary resource HTTP API', () => {
     const adapter: MddResourceAdapter = { lookupResource, close: vi.fn() };
     server = await createApiServer(database, {
       packageStorage: new DictionaryPackageStorage(root), mddResourceAdapter: adapter,
+      pronunciationAudioService: {
+        getAudio: async (dictionaryId, logicalPath) => {
+          if (logicalPath === 'uk/unavailable.spx') {
+            throw new PronunciationAudioError('PRONUNCIATION_TRANSCODER_UNAVAILABLE', 'Pronunciation transcoder is unavailable');
+          }
+          return dictionaryId === dictionaryA && logicalPath === 'uk/test.spx'
+            ? { bytes: Buffer.from('ID3browser'), contentType: 'audio/mpeg', cacheHit: true }
+            : null;
+        },
+      },
       startImportJob: () => {},
     });
   });
@@ -78,5 +89,36 @@ describe('dictionary resource HTTP API', () => {
     const response = await server.inject({ method: 'GET', url: '/docs/json' });
     const route = response.json().paths['/api/dictionaries/{dictionaryId}/resources/{*}'].get;
     expect(route.responses['200'].content['application/octet-stream'].schema).toEqual({ type: 'string', format: 'binary' });
+  });
+
+  it('returns browser-compatible pronunciation audio from a separate endpoint', async () => {
+    const response = await server.inject({
+      method: 'GET', url: `/api/dictionaries/${dictionaryA}/browser-audio/uk/test.spx`,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toBe('audio/mpeg');
+    expect(response.rawPayload).toEqual(Buffer.from('ID3browser'));
+
+    const missing = await server.inject({
+      method: 'GET', url: `/api/dictionaries/${dictionaryB}/browser-audio/uk/test.spx`,
+    });
+    expect(missing.statusCode).toBe(404);
+    expect(missing.json().error.code).toBe('PRONUNCIATION_AUDIO_NOT_FOUND');
+  });
+
+  it('documents browser-compatible pronunciation audio in OpenAPI', async () => {
+    const response = await server.inject({ method: 'GET', url: '/docs/json' });
+    const route = response.json().paths['/api/dictionaries/{dictionaryId}/browser-audio/{*}'].get;
+    expect(route.responses['200'].content['audio/mpeg'].schema).toEqual({ type: 'string', format: 'binary' });
+  });
+
+  it('returns a controlled error when the transcoder is unavailable', async () => {
+    const response = await server.inject({
+      method: 'GET', url: `/api/dictionaries/${dictionaryA}/browser-audio/uk/unavailable.spx`,
+    });
+    expect(response.statusCode).toBe(503);
+    expect(response.json()).toEqual({ error: {
+      code: 'PRONUNCIATION_TRANSCODER_UNAVAILABLE', message: 'Pronunciation transcoder is unavailable',
+    } });
   });
 });

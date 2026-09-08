@@ -18,6 +18,10 @@ import { JsMdictLazyAdapter } from '../mdx/lazy-mdx-adapter.js';
 import { LocalDirectoryStorage } from '../storage/local-directory-storage.js';
 import { JsMddResourceAdapter, type MddResourceAdapter } from '../mdx/mdd-resource-adapter.js';
 import { DictionaryResourceService } from '../resources/dictionary-resource-service.js';
+import {
+  PronunciationAudioError,
+  PronunciationAudioService,
+} from '../resources/pronunciation-audio-service.js';
 import { InvalidLogicalResourcePathError } from '../resources/logical-resource-path.js';
 import {
   DictionaryPackageStorage,
@@ -52,6 +56,7 @@ export interface ApiServerOptions {
   startImportJob?: (jobId: string) => void | Promise<void>;
   packageStorage?: DictionaryPackageStorage;
   mddResourceAdapter?: MddResourceAdapter;
+  pronunciationAudioService?: Pick<PronunciationAudioService, 'getAudio'>;
   detailShadow?: DictionaryDetailShadowHook;
   lazyPrimary?: LazyPrimaryOptions;
 }
@@ -161,6 +166,11 @@ export async function createApiServer(database: PrismaClient, options: ApiServer
   const packageStorage = options.packageStorage ?? new DictionaryPackageStorage(config.dataDir);
   const mddResourceAdapter = options.mddResourceAdapter ?? new JsMddResourceAdapter();
   const resourceService = new DictionaryResourceService(database, packageStorage, mddResourceAdapter);
+  const pronunciationAudioService = options.pronunciationAudioService ?? new PronunciationAudioService(
+    database,
+    resourceService,
+    packageStorage.pathForStorageKey('.cache/pronunciation-audio'),
+  );
   app.addHook('onClose', async () => { mddResourceAdapter.close?.(); lazyMdxAdapter?.close(); });
   const packageImportService = new DictionaryPackageImportService(database, packageStorage);
   await new DictionaryStylesheetCompatibilityService(database, packageStorage).reconcileStoredPackages();
@@ -180,6 +190,21 @@ export async function createApiServer(database: PrismaClient, options: ApiServer
               200: {
                 description: 'Decoded bytes stored in the MDD resource; the response Content-Type is detected from its bytes',
                 content: { 'application/octet-stream': { schema: { type: 'string', format: 'binary' } } },
+              },
+            },
+          } as typeof schema,
+          url,
+        };
+      }
+      if (url === '/api/dictionaries/:dictionaryId/browser-audio/*') {
+        return {
+          schema: {
+            ...schema,
+            response: {
+              ...((schema.response ?? {}) as Record<string, unknown>),
+              200: {
+                description: 'Browser-compatible MP3 derived from an Ogg/Speex pronunciation resource',
+                content: { 'audio/mpeg': { schema: { type: 'string', format: 'binary' } } },
               },
             },
           } as typeof schema,
@@ -428,6 +453,39 @@ export async function createApiServer(database: PrismaClient, options: ApiServer
     } catch (error) {
       if (error instanceof InvalidLogicalResourcePathError) {
         throw new HttpError(400, 'INVALID_RESOURCE_PATH', error.message);
+      }
+      throw error;
+    }
+  });
+
+  app.get<{ Params: DictionaryAssetParams }>('/api/dictionaries/:dictionaryId/browser-audio/*', {
+    schema: {
+      operationId: 'getBrowserPronunciationAudio', summary: 'Get browser-compatible pronunciation audio', tags: ['resources'],
+      params: {
+        type: 'object', required: ['dictionaryId', '*'],
+        properties: {
+          dictionaryId: { type: 'string', format: 'uuid' },
+          '*': { type: 'string', minLength: 1, description: 'Case-sensitive, Unicode logical Ogg/Speex resource path' },
+        },
+      },
+      response: {
+        200: { type: 'string', format: 'binary', description: 'On-demand mono MP3 pronunciation audio' },
+        400: errorSchema, 404: errorSchema, 415: errorSchema, 503: errorSchema, 500: errorSchema,
+      },
+    },
+  }, async (request, reply) => {
+    const dictionaryId = requireUuid(request.params.dictionaryId, 'dictionaryId');
+    try {
+      const audio = await pronunciationAudioService.getAudio(dictionaryId, request.params['*']);
+      if (!audio) throw new HttpError(404, 'PRONUNCIATION_AUDIO_NOT_FOUND', 'Pronunciation audio not found');
+      return reply.header('Cache-Control', 'private, max-age=3600').type(audio.contentType).send(audio.bytes);
+    } catch (error) {
+      if (error instanceof InvalidLogicalResourcePathError) {
+        throw new HttpError(400, 'INVALID_RESOURCE_PATH', error.message);
+      }
+      if (error instanceof PronunciationAudioError) {
+        const status = error.code === 'INVALID_PRONUNCIATION_AUDIO' ? 415 : 503;
+        throw new HttpError(status, error.code, error.message);
       }
       throw error;
     }

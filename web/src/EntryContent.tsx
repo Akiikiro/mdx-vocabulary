@@ -10,7 +10,7 @@ function resourceUrl(dictionaryId: string, logicalPath: string): string | null {
   if (!logicalPath || logicalPath.startsWith('/') || logicalPath.includes('\\') || /[\u0000-\u001f\u007f]/u.test(logicalPath)) return null;
   const segments = logicalPath.split('/');
   if (segments.some((segment) => !segment || segment === '.' || segment === '..')) return null;
-  return `/api/dictionaries/${encodeURIComponent(dictionaryId)}/resources/${segments.map(encodeURIComponent).join('/')}`;
+  return `/api/dictionaries/${encodeURIComponent(dictionaryId)}/browser-audio/${segments.map(encodeURIComponent).join('/')}`;
 }
 
 export function EntryContent({ dictionaryId, sanitizedHtml, expanded }: EntryContentProps) {

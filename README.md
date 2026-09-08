@@ -292,6 +292,7 @@ http://127.0.0.1:3000
 | GET | `/api/dictionaries/:dictionaryId/import-status` | 返回 queued/importing/ready/failed 和导入进度。 |
 | GET | `/api/dictionaries/:dictionaryId/assets/styles/:file.css` | 读取该 dictionary 自动绑定的 CSS asset。 |
 | GET | `/api/dictionaries/:dictionaryId/resources/*` | 按大小写敏感的 Unicode 逻辑路径精确读取该 dictionary 的 MDD resource bytes。 |
+| GET | `/api/dictionaries/:dictionaryId/browser-audio/*` | 将经过校验的 Ogg/Speex 发音资源按需转换为浏览器兼容的 mono MP3，并使用包/内容身份感知的磁盘缓存。 |
 | GET | `/api/dictionaries/:dictionaryId/search` | 搜索指定 ready dictionary；支持 `q`、`mode`、`limit`、`offset`。 |
 | GET | `/api/entries/:entryId` | 获取 entry detail 和 sanitized HTML。 |
 | GET | `/api/vocabulary` | 按添加时间倒序列出收藏及其安全 entry 摘要。 |
@@ -309,6 +310,8 @@ curl 'http://127.0.0.1:3000/api/vocabulary'
 curl -X POST -H 'content-type: application/json' -d '{"entryId":"<entryId>"}' 'http://127.0.0.1:3000/api/vocabulary'
 curl -X DELETE 'http://127.0.0.1:3000/api/vocabulary/<vocabularyItemId>'
 ```
+
+Oxford 等词典的 `.spx` 发音资源需要运行环境提供支持 Speex 解码和 `libmp3lame` 编码的 `ffmpeg`。默认从 `PATH` 查找，也可通过 `FFMPEG_PATH` 指定可执行文件。原始 `/resources/*` 端点始终返回未经转换的 MDD bytes；前端发音控件使用独立的 `/browser-audio/*` 派生端点。首次请求完成转换后，MP3 缓存在 `APP_DATA_DIR/.cache/pronunciation-audio`。
 
 搜索只允许 ready dictionary；不存在的 dictionary 返回 404，非 ready dictionary 返回 409。API 参数错误使用 400，未预期错误使用不包含内部 stack trace 的 500 响应。
 
