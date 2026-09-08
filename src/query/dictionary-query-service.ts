@@ -1,5 +1,6 @@
 import type { EntryKind, Prisma, PrismaClient } from '@prisma/client';
 import { normalizeHeadword } from '../entries/normalize.js';
+import { classifyLazyDetailFailure, type ShadowFailureCategory } from './dictionary-detail-shadow-verifier.js';
 
 export interface SearchEntryDTO {
   id: string;
@@ -38,6 +39,28 @@ const detailSelect = {
 type SearchRow = Prisma.DictionaryEntryGetPayload<{ select: typeof searchSelect }>;
 type DetailRow = Prisma.DictionaryEntryGetPayload<{ select: typeof detailSelect }>;
 
+export interface DictionaryDetailShadowHook {
+  shouldVerify(entryId: string): boolean;
+  verify(storedDetail: EntryDetailDTO, storedDurationMs: number): Promise<unknown>;
+}
+
+export interface LazyPrimaryDetailReader {
+  getEntryFromPersistedLocator(entryId: string): Promise<{
+    detail: EntryDetailDTO; parserWasCold: boolean | null;
+    timings: { totalMs: number };
+  } | null>;
+}
+export interface LazyPrimaryEvent {
+  event: 'dictionary_detail_lazy_primary'; entryId: string; dictionaryId: string | null;
+  source: 'lazy' | 'stored_fallback'; fallbackReason: ShadowFailureCategory | null;
+  lazyDurationMs: number; storedFallbackDurationMs: number | null; cold: boolean | null;
+}
+export interface LazyPrimaryOptions { enabled: boolean; reader: LazyPrimaryDetailReader; observe?: (event: LazyPrimaryEvent) => void }
+
+export function parseLazyDictionaryDetailEnabled(value: string | undefined): boolean {
+  return value === 'true';
+}
+
 function pagination(options: SearchOptions): { take?: number; skip?: number } {
   const { limit, offset } = options;
   if (limit !== undefined && (!Number.isInteger(limit) || limit < 0)) {
@@ -62,7 +85,7 @@ function toSearchDTO(row: SearchRow, plainText = row.entryPlainText): SearchEntr
 }
 
 export class DictionaryQueryService {
-  constructor(private readonly prisma: PrismaClient) {}
+  constructor(private readonly prisma: PrismaClient, private readonly detailShadow?: DictionaryDetailShadowHook, private readonly lazyPrimary?: LazyPrimaryOptions) {}
 
   async searchExact(
     dictionaryId: string,
@@ -93,6 +116,33 @@ export class DictionaryQueryService {
   }
 
   async getEntry(entryId: string): Promise<EntryDetailDTO | null> {
+    if (this.lazyPrimary?.enabled) {
+      const lazyStarted = performance.now();
+      try {
+        const lazy = await this.lazyPrimary.reader.getEntryFromPersistedLocator(entryId);
+        if (!lazy) return null;
+        this.lazyPrimary.observe?.({ event: 'dictionary_detail_lazy_primary', entryId, dictionaryId: lazy.detail.dictionaryId,
+          source: 'lazy', fallbackReason: null, lazyDurationMs: performance.now() - lazyStarted, storedFallbackDurationMs: null, cold: lazy.parserWasCold });
+        return lazy.detail;
+      } catch (error) {
+        const lazyDurationMs = performance.now() - lazyStarted; const storedStarted = performance.now();
+        const stored = await this.getStoredEntry(entryId); const storedFallbackDurationMs = performance.now() - storedStarted;
+        this.lazyPrimary.observe?.({ event: 'dictionary_detail_lazy_primary', entryId, dictionaryId: stored?.dictionaryId ?? null,
+          source: 'stored_fallback', fallbackReason: classifyLazyDetailFailure(error), lazyDurationMs, storedFallbackDurationMs, cold: null });
+        return stored;
+      }
+    }
+    return this.getStoredEntryWithShadow(entryId);
+  }
+
+  private async getStoredEntryWithShadow(entryId: string): Promise<EntryDetailDTO | null> {
+    const started = performance.now();
+    const detail = await this.getStoredEntry(entryId);
+    if (detail && this.detailShadow?.shouldVerify(entryId)) void this.detailShadow.verify(detail, performance.now() - started).catch(() => undefined);
+    return detail;
+  }
+
+  private async getStoredEntry(entryId: string): Promise<EntryDetailDTO | null> {
     const row = await this.prisma.dictionaryEntry.findUnique({
       where: { id: entryId },
       select: detailSelect,
@@ -100,10 +150,11 @@ export class DictionaryQueryService {
     if (!row) return null;
 
     const target = await this.resolveDetailRedirect(row);
-    return {
+    const detail = {
       ...toSearchDTO(row, target?.entryPlainText ?? row.entryPlainText),
       sanitizedHtml: target?.entrySanitizedHtml ?? row.entrySanitizedHtml,
     };
+    return detail;
   }
 
   private async resolveSearchRedirects(rows: SearchRow[]): Promise<SearchEntryDTO[]> {

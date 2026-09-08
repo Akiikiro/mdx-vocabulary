@@ -11,7 +11,11 @@ import {
   DictionaryPackageImportService,
   DictionaryPackageValidationError,
 } from '../importer/dictionary-package-import-service.js';
-import { DictionaryQueryService } from '../query/dictionary-query-service.js';
+import { DictionaryQueryService, parseLazyDictionaryDetailEnabled, type DictionaryDetailShadowHook, type LazyPrimaryEvent, type LazyPrimaryOptions } from '../query/dictionary-query-service.js';
+import { classifyLazyDetailFailure, DictionaryDetailShadowVerifier, parseShadowSampleRate } from '../query/dictionary-detail-shadow-verifier.js';
+import { LazyDictionaryDetailPocService } from '../query/lazy-dictionary-detail-poc-service.js';
+import { JsMdictLazyAdapter } from '../mdx/lazy-mdx-adapter.js';
+import { LocalDirectoryStorage } from '../storage/local-directory-storage.js';
 import { JsMddResourceAdapter, type MddResourceAdapter } from '../mdx/mdd-resource-adapter.js';
 import { DictionaryResourceService } from '../resources/dictionary-resource-service.js';
 import { InvalidLogicalResourcePathError } from '../resources/logical-resource-path.js';
@@ -48,6 +52,8 @@ export interface ApiServerOptions {
   startImportJob?: (jobId: string) => void | Promise<void>;
   packageStorage?: DictionaryPackageStorage;
   mddResourceAdapter?: MddResourceAdapter;
+  detailShadow?: DictionaryDetailShadowHook;
+  lazyPrimary?: LazyPrimaryOptions;
 }
 
 class HttpError extends Error {
@@ -123,12 +129,39 @@ function requireUuid(value: string, name: string): string {
 
 export async function createApiServer(database: PrismaClient, options: ApiServerOptions = {}): Promise<FastifyInstance> {
   const app = Fastify({ logger: false });
-  const queryService = new DictionaryQueryService(database);
+  const shadowRate = parseShadowSampleRate(process.env.SHADOW_DETAIL_SAMPLE_RATE);
+  const lazyPrimaryEnabled = options.lazyPrimary?.enabled ?? parseLazyDictionaryDetailEnabled(process.env.LAZY_DICTIONARY_DETAIL_ENABLED);
+  const lazyMdxAdapter = !options.detailShadow && !options.lazyPrimary && (shadowRate > 0 || lazyPrimaryEnabled) ? new JsMdictLazyAdapter() : null;
+  const localStorage = new LocalDirectoryStorage(config.dataDir);
+  const lazyDetailService = lazyMdxAdapter ? new LazyDictionaryDetailPocService(database, lazyMdxAdapter, (key) => localStorage.pathFor(key)) : null;
+  const detailShadow = lazyPrimaryEnabled ? undefined : options.detailShadow ?? (lazyDetailService ? new DictionaryDetailShadowVerifier(
+    database,
+    lazyDetailService,
+    shadowRate,
+    process.env.SHADOW_DETAIL_SAMPLE_SEED ?? 'default',
+    (result) => console.info(JSON.stringify({
+      event: 'dictionary_detail_shadow', dictionaryId: result.dictionaryId, entryId: result.entryId,
+      shadowStatus: result.status, mismatchType: result.failureCategory ?? (result.identityMismatches.length ? result.identityMismatches : undefined),
+      htmlMismatch: result.htmlMismatch, plainTextMismatch: result.plainTextMismatch,
+      lazyDurationMs: result.lazyDurationMs, storedDurationMs: result.storedDurationMs,
+    })),
+  ) : undefined);
+  const logLazyPrimary = (event: LazyPrimaryEvent) => console.info(JSON.stringify(event));
+  const lazyPrimary = options.lazyPrimary ?? (lazyPrimaryEnabled && lazyDetailService
+    ? { enabled: true, reader: lazyDetailService, observe: logLazyPrimary } : undefined);
+  const queryService = new DictionaryQueryService(database, detailShadow, lazyPrimary);
+  if (lazyPrimaryEnabled && lazyDetailService && process.env.LAZY_DICTIONARY_DETAIL_WARMUP === 'true') {
+    const active = await database.dictionary.findFirst({ where: { status: 'ready', packageStorageKey: { not: null } }, orderBy: { importedAt: 'desc' }, select: { id: true } });
+    if (active) {
+      try { const result = await lazyDetailService.warmupDictionary(active.id); console.info(JSON.stringify({ event: 'dictionary_detail_lazy_warmup', dictionaryId: active.id, status: 'success', ...result })); }
+      catch (error) { console.info(JSON.stringify({ event: 'dictionary_detail_lazy_warmup', dictionaryId: active.id, status: 'failure', failureReason: classifyLazyDetailFailure(error) })); }
+    }
+  }
   const vocabularyService = new VocabularyService(database);
   const packageStorage = options.packageStorage ?? new DictionaryPackageStorage(config.dataDir);
   const mddResourceAdapter = options.mddResourceAdapter ?? new JsMddResourceAdapter();
   const resourceService = new DictionaryResourceService(database, packageStorage, mddResourceAdapter);
-  app.addHook('onClose', async () => { mddResourceAdapter.close?.(); });
+  app.addHook('onClose', async () => { mddResourceAdapter.close?.(); lazyMdxAdapter?.close(); });
   const packageImportService = new DictionaryPackageImportService(database, packageStorage);
   await new DictionaryStylesheetCompatibilityService(database, packageStorage).reconcileStoredPackages();
   const startImportJob = options.startImportJob ?? startWorkerProcess;

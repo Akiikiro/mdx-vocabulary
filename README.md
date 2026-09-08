@@ -107,6 +107,8 @@ MDD resource foundation 按 dictionary scope 枚举 package 中的 MDD 分卷，
 | `src/query/dictionary-query-service.ts` | Exact、prefix、entry detail 查询和一跳 redirect 解析。 |
 | `src/vocabulary/vocabulary-service.ts` | VocabularyItem 添加、列表、去重和移除业务逻辑及公开 DTO。 |
 | `src/query/lazy-dictionary-detail-poc-service.ts` | 非默认 Hybrid POC path；只读验证现有 entry UUID 到 MDX locator 的映射，并执行 lazy transform/sanitize，不注册公开 route。 |
+| `src/query/dictionary-detail-shadow-verifier.ts` | 默认关闭的 detail dual-read shadow；保持 stored DTO 响应不变，按确定性采样隔离执行 lazy parity 并输出不含 HTML/path 的结构化结果。 |
+| `src/query/lazy-detail-diagnostic-service.ts` | Dictionary-scoped、零写入、有限并发的 persisted-locator parity sampling 与 latency 汇总。 |
 | `src/http/server.ts` | Fastify 实例、REST routes、validation、error responses、Swagger。 |
 | `src/api.ts` | Fastify 进程启动和优雅关闭入口。 |
 | `web/src/api.ts` | 浏览器端相对路径 API client 和 DTO 类型。 |
@@ -236,6 +238,35 @@ npm run backfill-mdx-locators -- <dictionaryId> --apply --batch-size=500
 ```
 
 完整且验证一致的 locator 会被跳过，因此命令可重启；部分填写、checksum 不一致或 MDX identity 不一致均失败关闭。当前 public detail API 仍读取 PostgreSQL 中的既有 sanitized content。
+
+## Lazy detail shadow verification
+
+Public detail 默认仍返回 PostgreSQL stored content。开发或 staging 环境可以通过 `SHADOW_DETAIL_SAMPLE_RATE`（`0`–`100`，默认 `0`）启用确定性 shadow 百分比，并可用 `SHADOW_DETAIL_SAMPLE_SEED` 固定样本。Shadow 只比较 persisted-locator lazy pipeline，不替换响应；失败会被分类记录但不会使健康的 stored request 失败。无效采样率安全回落为关闭。
+
+独立的大样本诊断命令始终零写入，默认抽样 1,000 条并将并发限制为 2：
+
+```bash
+npm run verify-lazy-detail -- <dictionaryId>
+npm run verify-lazy-detail -- <dictionaryId> --sample-size=5000 --seed=review --concurrency=2
+```
+
+也可显式使用 `--all`，但日常验证优先使用确定性样本。命令报告 stored/lazy latency、lazy locator/fetch/transform 分解以及 mismatch/failure 分类。
+
+## Feature-flagged lazy detail primary
+
+`LAZY_DICTIONARY_DETAIL_ENABLED=true` 可在本地或 staging 将 entry detail 切换为 persisted locator → MDX exact fetch → marker-aware sanitizer；默认值及任何非精确 `true` 值都保持 stored PostgreSQL detail。Lazy 失败时临时回退到 stored detail，并输出不含 definition/path 的结构化分类事件。Lazy-primary 开启时不会再对同一请求运行 shadow。
+
+可选 `LAZY_DICTIONARY_DETAIL_WARMUP=true` 会在启动时预热最近导入的 ready package-backed dictionary；预热失败只记录事件，不阻止服务器启动，因为 stored fallback 仍可用：
+
+```bash
+LAZY_DICTIONARY_DETAIL_ENABLED=true LAZY_DICTIONARY_DETAIL_WARMUP=true npm run api
+```
+
+关闭或回滚只需移除变量或设置：
+
+```bash
+LAZY_DICTIONARY_DETAIL_ENABLED=false npm run api
+```
 
 ## 启动 Fastify backend
 

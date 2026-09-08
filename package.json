@@ -11,6 +11,7 @@
     "import-mdx": "tsx src/cli/import-mdx.ts",
     "reprocess-entries": "tsx src/cli/reprocess-entries.ts",
     "backfill-mdx-locators": "tsx src/cli/backfill-mdx-locators.ts",
+    "verify-lazy-detail": "tsx src/cli/verify-lazy-detail.ts",
     "test": "vitest run"
   },
   "dependencies": {
