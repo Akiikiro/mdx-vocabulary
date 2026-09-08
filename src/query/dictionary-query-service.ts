@@ -58,7 +58,7 @@ export interface LazyPrimaryEvent {
 export interface LazyPrimaryOptions { enabled: boolean; reader: LazyPrimaryDetailReader; observe?: (event: LazyPrimaryEvent) => void }
 
 export function parseLazyDictionaryDetailEnabled(value: string | undefined): boolean {
-  return value === 'true';
+  return value === undefined || value === 'true';
 }
 
 function pagination(options: SearchOptions): { take?: number; skip?: number } {

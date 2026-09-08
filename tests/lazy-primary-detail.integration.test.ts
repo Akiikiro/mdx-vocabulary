@@ -25,8 +25,8 @@ describe('feature-flagged lazy primary detail', () => {
   });
   afterAll(async () => { await db.dictionary.delete({ where: { id: dictionaryId } }); await db.$disconnect(); });
 
-  it('parses the dedicated flag safely and defaults to stored behavior', async () => {
-    expect(parseLazyDictionaryDetailEnabled(undefined)).toBe(false); expect(parseLazyDictionaryDetailEnabled('true')).toBe(true);
+  it('defaults the dedicated flag to lazy primary and accepts only explicit true or false', async () => {
+    expect(parseLazyDictionaryDetailEnabled(undefined)).toBe(true); expect(parseLazyDictionaryDetailEnabled('true')).toBe(true);
     expect(parseLazyDictionaryDetailEnabled('false')).toBe(false); expect(parseLazyDictionaryDetailEnabled('TRUE')).toBe(false); expect(parseLazyDictionaryDetailEnabled('1')).toBe(false); expect(parseLazyDictionaryDetailEnabled('')).toBe(false);
     const reader = { getEntryFromPersistedLocator: vi.fn() };
     expect((await new DictionaryQueryService(db, undefined, { enabled: false, reader }).getEntry(ids[0]))?.sanitizedHtml).toBe('stored-0');

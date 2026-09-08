@@ -237,11 +237,11 @@ npm run backfill-mdx-locators -- <dictionaryId> --dry-run --batch-size=500
 npm run backfill-mdx-locators -- <dictionaryId> --apply --batch-size=500
 ```
 
-完整且验证一致的 locator 会被跳过，因此命令可重启；部分填写、checksum 不一致或 MDX identity 不一致均失败关闭。当前 public detail API 仍读取 PostgreSQL 中的既有 sanitized content。
+完整且验证一致的 locator 会被跳过，因此命令可重启；部分填写、checksum 不一致或 MDX identity 不一致均失败关闭。Public detail 默认通过 persisted locator 从 MDX 懒读取；发生 locator、checksum、MDX 或 sanitizer 故障时仍回退到 PostgreSQL 中的既有 sanitized content。
 
 ## Lazy detail shadow verification
 
-Public detail 默认仍返回 PostgreSQL stored content。开发或 staging 环境可以通过 `SHADOW_DETAIL_SAMPLE_RATE`（`0`–`100`，默认 `0`）启用确定性 shadow 百分比，并可用 `SHADOW_DETAIL_SAMPLE_SEED` 固定样本。Shadow 只比较 persisted-locator lazy pipeline，不替换响应；失败会被分类记录但不会使健康的 stored request 失败。无效采样率安全回落为关闭。
+设置 `LAZY_DICTIONARY_DETAIL_ENABLED=false` 后，public detail 返回 PostgreSQL stored content；此时开发或 staging 环境可以通过 `SHADOW_DETAIL_SAMPLE_RATE`（`0`–`100`，默认 `0`）启用确定性 shadow 百分比，并可用 `SHADOW_DETAIL_SAMPLE_SEED` 固定样本。Shadow 只比较 persisted-locator lazy pipeline，不替换响应；失败会被分类记录但不会使健康的 stored request 失败。无效采样率安全回落为关闭。
 
 独立的大样本诊断命令始终零写入，默认抽样 1,000 条并将并发限制为 2：
 
@@ -254,15 +254,15 @@ npm run verify-lazy-detail -- <dictionaryId> --sample-size=5000 --seed=review --
 
 ## Feature-flagged lazy detail primary
 
-`LAZY_DICTIONARY_DETAIL_ENABLED=true` 可在本地或 staging 将 entry detail 切换为 persisted locator → MDX exact fetch → marker-aware sanitizer；默认值及任何非精确 `true` 值都保持 stored PostgreSQL detail。Lazy 失败时临时回退到 stored detail，并输出不含 definition/path 的结构化分类事件。Lazy-primary 开启时不会再对同一请求运行 shadow。
+Entry detail 默认使用 persisted locator → MDX exact fetch → marker-aware sanitizer：`LAZY_DICTIONARY_DETAIL_ENABLED` 未设置或精确为 `true` 时启用 lazy-primary；精确设置为 `false` 时切回 stored PostgreSQL detail。其他未识别值安全关闭 lazy-primary。Lazy 失败时临时回退到 stored detail，并输出不含 definition/path 的结构化分类事件。Lazy-primary 开启时不会再对同一请求运行 shadow。
 
 可选 `LAZY_DICTIONARY_DETAIL_WARMUP=true` 会在启动时预热最近导入的 ready package-backed dictionary；预热失败只记录事件，不阻止服务器启动，因为 stored fallback 仍可用：
 
 ```bash
-LAZY_DICTIONARY_DETAIL_ENABLED=true LAZY_DICTIONARY_DETAIL_WARMUP=true npm run api
+LAZY_DICTIONARY_DETAIL_WARMUP=true npm run api
 ```
 
-关闭或回滚只需移除变量或设置：
+关闭或回滚只需显式设置：
 
 ```bash
 LAZY_DICTIONARY_DETAIL_ENABLED=false npm run api
