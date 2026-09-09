@@ -8,6 +8,7 @@ import type { MddResourceAdapter } from '../src/mdx/mdd-resource-adapter.js';
 import { createApiServer } from '../src/http/server.js';
 import { DictionaryPackageStorage } from '../src/storage/dictionary-package-storage.js';
 import { PronunciationAudioError } from '../src/resources/pronunciation-audio-service.js';
+import { EdgeTtsError } from '../src/resources/edge-tts-service.js';
 
 describe('dictionary resource HTTP API', () => {
   const dictionaryA = '11111111-1111-4111-8111-111111111111';
@@ -48,6 +49,12 @@ describe('dictionary resource HTTP API', () => {
           return dictionaryId === dictionaryA && logicalPath === 'uk/test.spx'
             ? { bytes: Buffer.from('ID3browser'), contentType: 'audio/mpeg', cacheHit: true }
             : null;
+        },
+      },
+      edgeTtsService: {
+        getAudio: async (word, voice) => {
+          if (word === 'unavailable') throw new EdgeTtsError('EDGE_TTS_UNAVAILABLE', 'Edge TTS is unavailable');
+          return { bytes: Buffer.from('ID3edge'), contentType: 'audio/mpeg', voice: voice === 'female' ? 'en-US-AvaNeural' : 'en-US-BrianNeural', cacheHit: false };
         },
       },
       startImportJob: () => {},
@@ -120,5 +127,29 @@ describe('dictionary resource HTTP API', () => {
     expect(response.json()).toEqual({ error: {
       code: 'PRONUNCIATION_TRANSCODER_UNAVAILABLE', message: 'Pronunciation transcoder is unavailable',
     } });
+  });
+
+  it('returns experimental Edge TTS audio without exposing provider details', async () => {
+    const response = await server.inject({ method: 'GET', url: '/api/experimental/edge-tts?word=test&voice=female' });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toBe('audio/mpeg');
+    expect(response.rawPayload).toEqual(Buffer.from('ID3edge'));
+
+    const invalid = await server.inject({ method: 'GET', url: '/api/experimental/edge-tts?word=test&voice=other' });
+    expect(invalid.statusCode).toBe(400);
+    const oldAccent = await server.inject({ method: 'GET', url: '/api/experimental/edge-tts?word=test&accent=us' });
+    expect(oldAccent.statusCode).toBe(400);
+    const unavailable = await server.inject({ method: 'GET', url: '/api/experimental/edge-tts?word=unavailable&voice=male' });
+    expect(unavailable.statusCode).toBe(503);
+    expect(unavailable.json()).toEqual({ error: { code: 'EDGE_TTS_UNAVAILABLE', message: 'Edge TTS is unavailable' } });
+  });
+
+  it('documents the experimental Edge TTS endpoint in OpenAPI', async () => {
+    const response = await server.inject({ method: 'GET', url: '/docs/json' });
+    const route = response.json().paths['/api/experimental/edge-tts'].get;
+    expect(route.parameters).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'voice', required: true, schema: expect.objectContaining({ enum: ['female', 'male'] }) }),
+    ]));
+    expect(route.responses['200'].content['audio/mpeg'].schema).toEqual({ type: 'string', format: 'binary' });
   });
 });

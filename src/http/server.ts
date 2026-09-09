@@ -22,6 +22,7 @@ import {
   PronunciationAudioError,
   PronunciationAudioService,
 } from '../resources/pronunciation-audio-service.js';
+import { EdgeTtsError, EdgeTtsService, type EdgeTtsVoice } from '../resources/edge-tts-service.js';
 import { InvalidLogicalResourcePathError } from '../resources/logical-resource-path.js';
 import {
   DictionaryPackageStorage,
@@ -51,12 +52,14 @@ interface AddVocabularyBody { entryId: string }
 interface SearchQuery { q: string; mode?: 'exact' | 'prefix'; limit?: number; offset?: number }
 interface DictionaryParams { dictionaryId: string }
 interface DictionaryAssetParams extends DictionaryParams { '*': string }
+interface EdgeTtsQuery { word: string; voice: EdgeTtsVoice }
 
 export interface ApiServerOptions {
   startImportJob?: (jobId: string) => void | Promise<void>;
   packageStorage?: DictionaryPackageStorage;
   mddResourceAdapter?: MddResourceAdapter;
   pronunciationAudioService?: Pick<PronunciationAudioService, 'getAudio'>;
+  edgeTtsService?: Pick<EdgeTtsService, 'getAudio'>;
   detailShadow?: DictionaryDetailShadowHook;
   lazyPrimary?: LazyPrimaryOptions;
 }
@@ -171,6 +174,9 @@ export async function createApiServer(database: PrismaClient, options: ApiServer
     resourceService,
     packageStorage.pathForStorageKey('.cache/pronunciation-audio'),
   );
+  const edgeTtsService = options.edgeTtsService ?? new EdgeTtsService(
+    packageStorage.pathForStorageKey('.cache/edge-tts'),
+  );
   app.addHook('onClose', async () => { mddResourceAdapter.close?.(); lazyMdxAdapter?.close(); });
   const packageImportService = new DictionaryPackageImportService(database, packageStorage);
   await new DictionaryStylesheetCompatibilityService(database, packageStorage).reconcileStoredPackages();
@@ -204,6 +210,21 @@ export async function createApiServer(database: PrismaClient, options: ApiServer
               ...((schema.response ?? {}) as Record<string, unknown>),
               200: {
                 description: 'Browser-compatible MP3 derived from an Ogg/Speex pronunciation resource',
+                content: { 'audio/mpeg': { schema: { type: 'string', format: 'binary' } } },
+              },
+            },
+          } as typeof schema,
+          url,
+        };
+      }
+      if (url === '/api/experimental/edge-tts') {
+        return {
+          schema: {
+            ...schema,
+            response: {
+              ...((schema.response ?? {}) as Record<string, unknown>),
+              200: {
+                description: 'Experimental Edge TTS MP3 pronunciation',
                 content: { 'audio/mpeg': { schema: { type: 'string', format: 'binary' } } },
               },
             },
@@ -486,6 +507,36 @@ export async function createApiServer(database: PrismaClient, options: ApiServer
       if (error instanceof PronunciationAudioError) {
         const status = error.code === 'INVALID_PRONUNCIATION_AUDIO' ? 415 : 503;
         throw new HttpError(status, error.code, error.message);
+      }
+      throw error;
+    }
+  });
+
+  app.get<{ Querystring: EdgeTtsQuery }>('/api/experimental/edge-tts', {
+    schema: {
+      operationId: 'getExperimentalEdgeTts', summary: 'Generate an experimental Edge TTS pronunciation', tags: ['resources'],
+      querystring: {
+        type: 'object', required: ['word', 'voice'], additionalProperties: false,
+        properties: {
+          word: { type: 'string', minLength: 1, maxLength: 100 },
+          voice: { type: 'string', enum: ['female', 'male'] },
+        },
+      },
+      response: {
+        200: { type: 'string', format: 'binary', description: 'Experimental Edge TTS mono MP3' },
+        400: errorSchema, 503: errorSchema, 500: errorSchema,
+      },
+    },
+  }, async (request, reply) => {
+    try {
+      const audio = await edgeTtsService.getAudio(request.query.word, request.query.voice);
+      return reply
+        .header('Cache-Control', 'private, max-age=86400')
+        .type(audio.contentType)
+        .send(audio.bytes);
+    } catch (error) {
+      if (error instanceof EdgeTtsError) {
+        throw new HttpError(error.code === 'INVALID_EDGE_TTS_REQUEST' ? 400 : 503, error.code, error.message);
       }
       throw error;
     }

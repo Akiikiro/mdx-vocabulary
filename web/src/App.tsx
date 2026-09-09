@@ -442,6 +442,7 @@ export function App() {
             {detail.redirectTarget && <p className="redirect-detail">Redirected from this entry to {detail.redirectTarget}</p>}
             <EntryContent
               dictionaryId={detail.dictionaryId}
+              headword={detail.headword}
               sanitizedHtml={detail.sanitizedHtml}
               expanded={detailExpanded}
             />

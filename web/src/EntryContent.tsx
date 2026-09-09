@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 
 interface EntryContentProps {
   dictionaryId: string;
+  headword: string;
   sanitizedHtml: string;
   expanded: boolean;
 }
@@ -13,7 +14,11 @@ function resourceUrl(dictionaryId: string, logicalPath: string): string | null {
   return `/api/dictionaries/${encodeURIComponent(dictionaryId)}/browser-audio/${segments.map(encodeURIComponent).join('/')}`;
 }
 
-export function EntryContent({ dictionaryId, sanitizedHtml, expanded }: EntryContentProps) {
+function edgeTtsUrl(word: string, voice: 'female' | 'male'): string {
+  return `/api/experimental/edge-tts?word=${encodeURIComponent(word)}&voice=${voice}`;
+}
+
+export function EntryContent({ dictionaryId, headword, sanitizedHtml, expanded }: EntryContentProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -26,9 +31,10 @@ export function EntryContent({ dictionaryId, sanitizedHtml, expanded }: EntryCon
 
     const resetButton = (button: HTMLButtonElement) => {
       button.classList.remove('loading', 'playing', 'failed');
-      button.textContent = '🔊';
-      button.setAttribute('aria-label', 'Play pronunciation');
-      button.title = 'Play pronunciation';
+      button.textContent = button.dataset.label ?? '🔊';
+      const description = button.dataset.description ?? 'pronunciation';
+      button.setAttribute('aria-label', `Play ${description}`);
+      button.title = `Play ${description}`;
       button.disabled = false;
     };
 
@@ -44,8 +50,7 @@ export function EntryContent({ dictionaryId, sanitizedHtml, expanded }: EntryCon
     };
 
     const play = async (button: HTMLButtonElement) => {
-      const logicalPath = button.dataset.mdictResource ?? '';
-      const url = resourceUrl(dictionaryId, logicalPath);
+      const url = button.dataset.audioUrl ?? '';
       if (!url) return;
 
       stopCurrent();
@@ -62,8 +67,8 @@ export function EntryContent({ dictionaryId, sanitizedHtml, expanded }: EntryCon
         if (disposed || currentAudio !== audio) return;
         button.classList.remove('loading');
         button.classList.add('playing');
-        button.textContent = '🔊';
-        button.setAttribute('aria-label', 'Replay pronunciation');
+        button.textContent = button.dataset.label ?? '🔊';
+        button.setAttribute('aria-label', `Replay ${button.dataset.description ?? 'pronunciation'}`);
       };
       audio.onended = () => {
         if (currentAudio === audio) stopCurrent();
@@ -96,6 +101,20 @@ export function EntryContent({ dictionaryId, sanitizedHtml, expanded }: EntryCon
       button.type = 'button';
       button.className = 'pronunciation-button';
       button.dataset.mdictResource = logicalPath;
+      button.dataset.audioUrl = url ?? '';
+      const firstSegment = logicalPath.split('/')[0]?.toLowerCase();
+      const accent = firstSegment === 'uk' || firstSegment === 'us' ? firstSegment : null;
+
+      if (accent === 'uk') {
+        marker.remove();
+        continue;
+      }
+
+      if (accent === 'us') {
+        button.classList.add('labeled-pronunciation-button');
+        button.dataset.label = 'Oxford US';
+      }
+      button.dataset.description = accent ? `Oxford ${accent.toUpperCase()} pronunciation` : 'Oxford pronunciation';
       resetButton(button);
 
       if (!url) {
@@ -106,7 +125,25 @@ export function EntryContent({ dictionaryId, sanitizedHtml, expanded }: EntryCon
         button.title = 'Pronunciation unavailable';
       }
 
-      marker.replaceWith(button);
+      if (accent === 'us') {
+        const controls = document.createElement('span');
+        controls.className = 'pronunciation-controls';
+        controls.append(button);
+
+        for (const voice of ['female', 'male'] as const) {
+          const edgeButton = document.createElement('button');
+          edgeButton.type = 'button';
+          edgeButton.className = 'pronunciation-button edge-tts-button';
+          edgeButton.dataset.audioUrl = edgeTtsUrl(headword, voice);
+          edgeButton.dataset.label = voice === 'female' ? 'Female' : 'Male';
+          edgeButton.dataset.description = `experimental Edge TTS ${voice} pronunciation`;
+          resetButton(edgeButton);
+          controls.append(edgeButton);
+        }
+        marker.replaceWith(controls);
+      } else {
+        marker.replaceWith(button);
+      }
     }
 
     const handleClick = (event: MouseEvent) => {
@@ -122,7 +159,7 @@ export function EntryContent({ dictionaryId, sanitizedHtml, expanded }: EntryCon
       container.removeEventListener('click', handleClick);
       stopCurrent();
     };
-  }, [dictionaryId, sanitizedHtml]);
+  }, [dictionaryId, headword, sanitizedHtml]);
 
   return (
     <div

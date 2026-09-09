@@ -93,6 +93,8 @@ h2 { margin: 0 0 18px; font-size: 1.05rem; }
 .pronunciation-button.playing { border-color: #176448; box-shadow: 0 0 0 3px rgb(23 100 72 / 13%); }
 .pronunciation-button.loading { cursor: progress; }
 .pronunciation-button.failed { border-color: #d4c9c6; background: #f4f1ef; color: #8d5f57; cursor: not-allowed; }
+.pronunciation-controls { display: inline-flex; align-items: center; gap: 0.25rem; }
+.edge-tts-button, .labeled-pronunciation-button { width: auto; min-width: 3.8rem; padding: 0.2rem 0.4rem; font-size: 0.68rem; }
 .redirect-detail { padding: 9px 12px; border-radius: 7px; background: #fff4de; color: #704912; }
 .placeholder, .status, .empty-state { color: #758078; }
 .error { margin: 18px 0 0; padding: 11px 13px; border-radius: 7px; background: #fff0ee; color: #9a2d20; }
