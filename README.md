@@ -19,7 +19,7 @@
 - Fastify 参数校验、统一错误响应和 OpenAPI schema。
 - Swagger UI 和 JSON/YAML OpenAPI 文档。
 - React Dictionary view：选择字典、prefix autocomplete 候选、键盘选择及可折叠的完整词条展示。
-- Dictionary 可声明可选 stylesheet URL；Oxford 8 使用随 Web 应用发布的 `O8C.css`，恢复 sanitized HTML 中保留 class 所支持的词典样式。前端通过安全的 MDict marker 显示 MDD 图片和发音控件。
+- Dictionary 可声明可选 stylesheet URL；Oxford 8 使用随 Web 应用发布的 `O8C.css`，恢复 sanitized HTML 中保留 class 所支持的词典样式。前端通过安全的 MDict marker 显示 MDD 图片和发音控件，并在当前 dictionary 内解析内部词条引用。
 - Package 中唯一的 CSS 会自动绑定并由 Fastify dictionary asset route 提供；已知 stylesheet 通过内容 fingerprint 获得 rendering compatibility profile，使重复导入保持相同 override。MDD 资源按 dictionary 保存并由 scoped resource API 按需读取。
 - 单用户本地 Vocabulary Book：收藏词条到 PostgreSQL、持久展示、重新打开完整词条和移除收藏。
 - Importer、查询服务、HTTP API 的单元及 PostgreSQL integration tests。

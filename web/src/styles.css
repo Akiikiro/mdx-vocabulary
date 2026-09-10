@@ -74,6 +74,12 @@ h2 { margin: 0 0 18px; font-size: 1.05rem; }
 .dictionary-entry .pos { color: #8d3b2e; font-style: italic; }
 .dictionary-entry a { color: #176448; }
 .dictionary-resource-image { max-width: 100%; height: auto; vertical-align: middle; }
+.mdict-entry-reference { color: #176448; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 0.15em; cursor: pointer; }
+.mdict-entry-reference:hover, .mdict-entry-reference:focus-visible { color: #0d4933; text-decoration-style: solid; outline: none; }
+.mdict-entry-reference:focus-visible { border-radius: 2px; box-shadow: 0 0 0 3px rgb(23 100 72 / 18%); }
+.mdict-entry-reference.loading { cursor: progress; opacity: 0.7; }
+.mdict-entry-reference.failed { color: #8d3b2e; }
+.mdict-entry-reference-error { margin-left: 0.3em; color: #8d3b2e; font-family: system-ui, sans-serif; font-size: 0.75em; }
 .pronunciation-button {
   display: inline-flex;
   align-items: center;

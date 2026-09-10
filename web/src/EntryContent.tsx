@@ -5,7 +5,10 @@ interface EntryContentProps {
   headword: string;
   sanitizedHtml: string;
   expanded: boolean;
+  onNavigateEntryReference: (target: string) => Promise<boolean>;
 }
+
+const MAX_ENTRY_TARGET_LENGTH = 4096;
 
 function encodedResourcePath(logicalPath: string): string | null {
   if (!logicalPath || logicalPath.startsWith('/') || logicalPath.includes('\\') || /[\u0000-\u001f\u007f]/u.test(logicalPath)) return null;
@@ -32,8 +35,16 @@ function edgeTtsUrl(word: string, voice: 'female' | 'male'): string {
   return `/api/experimental/edge-tts?word=${encodeURIComponent(word)}&voice=${voice}`;
 }
 
-export function EntryContent({ dictionaryId, headword, sanitizedHtml, expanded }: EntryContentProps) {
+export function EntryContent({
+  dictionaryId,
+  headword,
+  sanitizedHtml,
+  expanded,
+  onNavigateEntryReference,
+}: EntryContentProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const navigateEntryReferenceRef = useRef(onNavigateEntryReference);
+  navigateEntryReferenceRef.current = onNavigateEntryReference;
 
   useEffect(() => {
     const container = containerRef.current;
@@ -42,6 +53,41 @@ export function EntryContent({ dictionaryId, headword, sanitizedHtml, expanded }
     let currentAudio: HTMLAudioElement | null = null;
     let currentButton: HTMLButtonElement | null = null;
     let disposed = false;
+
+    const entryTarget = (marker: HTMLElement): string | null => {
+      const target = marker.dataset.mdictEntryTarget?.trim().normalize('NFC') ?? '';
+      return target && target.length <= MAX_ENTRY_TARGET_LENGTH && !/[\u0000-\u001f\u007f]/u.test(target)
+        ? target
+        : null;
+    };
+
+    for (const marker of container.querySelectorAll<HTMLElement>('span[data-mdict-kind="entry"][data-mdict-entry-target]')) {
+      const target = entryTarget(marker);
+      if (!target) continue;
+      marker.classList.add('mdict-entry-reference');
+      marker.setAttribute('role', 'link');
+      marker.tabIndex = 0;
+      marker.setAttribute('aria-label', `Open dictionary entry ${target}`);
+    }
+
+    const activateEntryReference = async (marker: HTMLElement) => {
+      const target = entryTarget(marker);
+      if (!target || marker.classList.contains('loading')) return;
+      container.querySelector('.mdict-entry-reference-error')?.remove();
+      marker.classList.remove('failed');
+      marker.classList.add('loading');
+      marker.setAttribute('aria-disabled', 'true');
+      const navigated = await navigateEntryReferenceRef.current(target);
+      if (disposed || navigated) return;
+      marker.classList.remove('loading');
+      marker.classList.add('failed');
+      marker.removeAttribute('aria-disabled');
+      const failure = document.createElement('span');
+      failure.className = 'mdict-entry-reference-error';
+      failure.setAttribute('role', 'status');
+      failure.textContent = 'Reference not found';
+      marker.insertAdjacentElement('afterend', failure);
+    };
 
     const resetButton = (button: HTMLButtonElement) => {
       button.classList.remove('loading', 'playing', 'failed');
@@ -181,14 +227,30 @@ export function EntryContent({ dictionaryId, headword, sanitizedHtml, expanded }
     const handleClick = (event: MouseEvent) => {
       const target = event.target;
       if (!(target instanceof Element)) return;
+      const entryReference = target.closest<HTMLElement>('.mdict-entry-reference');
+      if (entryReference && container.contains(entryReference)) {
+        void activateEntryReference(entryReference);
+        return;
+      }
       const button = target.closest<HTMLButtonElement>('.pronunciation-button');
       if (button && container.contains(button) && !button.disabled) void play(button);
     };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const entryReference = target.closest<HTMLElement>('.mdict-entry-reference');
+      if (!entryReference || !container.contains(entryReference)) return;
+      event.preventDefault();
+      void activateEntryReference(entryReference);
+    };
     container.addEventListener('click', handleClick);
+    container.addEventListener('keydown', handleKeyDown);
 
     return () => {
       disposed = true;
       container.removeEventListener('click', handleClick);
+      container.removeEventListener('keydown', handleKeyDown);
       stopCurrent();
     };
   }, [dictionaryId, headword, sanitizedHtml]);

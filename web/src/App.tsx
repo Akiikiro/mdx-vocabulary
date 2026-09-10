@@ -143,7 +143,10 @@ export function App() {
     detailController.current?.abort();
   }, []);
 
-  async function selectEntry(entry: SearchEntry) {
+  async function selectEntry(
+    entry: SearchEntry,
+    options: { preserveDetailOnFailure?: boolean; reportError?: boolean } = {},
+  ): Promise<boolean> {
     autocompleteController.current?.abort();
     if (debounceTimer.current) clearTimeout(debounceTimer.current);
     skipAutocompleteValue.current = entry.headword;
@@ -163,14 +166,32 @@ export function App() {
     setLoadingDetail(true);
     try {
       const selectedDetail = await getEntry(entry.id, controller.signal);
-      if (!controller.signal.aborted) setDetail(selectedDetail);
+      if (!controller.signal.aborted) {
+        setDetail(selectedDetail);
+        return true;
+      }
     } catch (reason) {
       if (!isAbortError(reason)) {
-        setDetail(null);
-        setError(messageFrom(reason));
+        if (!options.preserveDetailOnFailure) setDetail(null);
+        if (options.reportError !== false) setError(messageFrom(reason));
       }
     } finally {
       if (!controller.signal.aborted) setLoadingDetail(false);
+    }
+    return false;
+  }
+
+  async function navigateEntryReference(target: string): Promise<boolean> {
+    const currentDictionaryId = detail?.dictionaryId ?? dictionaryId;
+    if (!currentDictionaryId) return false;
+    try {
+      const matches = await searchEntries(currentDictionaryId, target, 'exact', { limit: 20, offset: 0 });
+      const match = matches[0];
+      return match
+        ? selectEntry(match, { preserveDetailOnFailure: true, reportError: false })
+        : false;
+    } catch {
+      return false;
     }
   }
 
@@ -445,6 +466,7 @@ export function App() {
               headword={detail.headword}
               sanitizedHtml={detail.sanitizedHtml}
               expanded={detailExpanded}
+              onNavigateEntryReference={navigateEntryReference}
             />
           </article>
         )}
