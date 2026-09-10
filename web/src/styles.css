@@ -73,6 +73,7 @@ h2 { margin: 0 0 18px; font-size: 1.05rem; }
 .dictionary-entry .x-g, .dictionary-entry .def-g { display: block; margin: 7px 0; }
 .dictionary-entry .pos { color: #8d3b2e; font-style: italic; }
 .dictionary-entry a { color: #176448; }
+.dictionary-resource-image { max-width: 100%; height: auto; vertical-align: middle; }
 .pronunciation-button {
   display: inline-flex;
   align-items: center;

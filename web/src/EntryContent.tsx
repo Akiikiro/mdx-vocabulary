@@ -7,11 +7,25 @@ interface EntryContentProps {
   expanded: boolean;
 }
 
-function resourceUrl(dictionaryId: string, logicalPath: string): string | null {
+function encodedResourcePath(logicalPath: string): string | null {
   if (!logicalPath || logicalPath.startsWith('/') || logicalPath.includes('\\') || /[\u0000-\u001f\u007f]/u.test(logicalPath)) return null;
   const segments = logicalPath.split('/');
   if (segments.some((segment) => !segment || segment === '.' || segment === '..')) return null;
-  return `/api/dictionaries/${encodeURIComponent(dictionaryId)}/browser-audio/${segments.map(encodeURIComponent).join('/')}`;
+  return segments.map(encodeURIComponent).join('/');
+}
+
+function pronunciationResourceUrl(dictionaryId: string, logicalPath: string): string | null {
+  const resourcePath = encodedResourcePath(logicalPath);
+  return resourcePath
+    ? `/api/dictionaries/${encodeURIComponent(dictionaryId)}/browser-audio/${resourcePath}`
+    : null;
+}
+
+function imageResourceUrl(dictionaryId: string, logicalPath: string): string | null {
+  const resourcePath = encodedResourcePath(logicalPath);
+  return resourcePath
+    ? `/api/dictionaries/${encodeURIComponent(dictionaryId)}/resources/${resourcePath}`
+    : null;
 }
 
 function edgeTtsUrl(word: string, voice: 'female' | 'male'): string {
@@ -94,9 +108,27 @@ export function EntryContent({ dictionaryId, headword, sanitizedHtml, expanded }
       }
     };
 
+    for (const marker of container.querySelectorAll<HTMLElement>('span[data-mdict-kind="image"][data-mdict-resource]')) {
+      const logicalPath = marker.dataset.mdictResource ?? '';
+      const url = imageResourceUrl(dictionaryId, logicalPath);
+      if (!url) {
+        marker.remove();
+        continue;
+      }
+
+      const image = document.createElement('img');
+      image.className = 'dictionary-resource-image';
+      image.src = url;
+      image.alt = '';
+      image.loading = 'lazy';
+      image.decoding = 'async';
+      image.addEventListener('error', () => image.remove(), { once: true });
+      marker.replaceWith(image);
+    }
+
     for (const marker of container.querySelectorAll<HTMLElement>('span[data-mdict-kind="sound"][data-mdict-resource]')) {
       const logicalPath = marker.dataset.mdictResource ?? '';
-      const url = resourceUrl(dictionaryId, logicalPath);
+      const url = pronunciationResourceUrl(dictionaryId, logicalPath);
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'pronunciation-button';
