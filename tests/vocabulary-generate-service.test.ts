@@ -13,9 +13,30 @@ describe('VocabularyGenerateService', () => {
       .resolves.toEqual({ paragraph, translation: '自然的中文翻译。', usedWords: ['study', 'plan'] });
     expect(provider.generateText).toHaveBeenCalledWith(expect.objectContaining({
       model: 'model-b', responseFormat: 'json', prompt: expect.stringMatching(
-        /Target 65–75.*required 50–90.*Do not replace.*Set usedWords to exactly \["study","plan"\]/s,
+        /Target 65–75.*required 35–120.*Do not replace.*Set usedWords to exactly \["study","plan"\]/s,
       ),
     }));
+  });
+
+  it('prompts for one coherent situation, natural collocations, and plausible logical relationships', async () => {
+    const words = ['bit', 'approve'];
+    const provider = fakeProvider([generatedOutput(words, paragraphWithCount(70, ...words))]);
+    const service = new VocabularyGenerateService(new AIModelService([provider]));
+
+    await service.generate({ provider: 'fixture', model: 'model-a', words });
+    const prompt = vi.mocked(provider.generateText).mock.calls[0]?.[0].prompt ?? '';
+    expect(prompt).toContain('one simple, plausible story or situation');
+    expect(prompt).toContain('lightweight mini-story arc');
+    expect(prompt).toContain('one small realistic problem or change');
+    expect(prompt).toContain('show a reasonable response, and end with an outcome');
+    expect(prompt).toContain('Do not write a diary-like list of flat actions');
+    expect(prompt).toContain('meaning and common collocations naturally fit the situation');
+    expect(prompt).toContain('Never invent an unlikely action, decision, or cause-and-effect link');
+    expect(prompt).toContain('Different vocabulary items may appear in separate sentences');
+    expect(prompt).toContain('similar connectors only when there is a genuine cause-and-effect relationship');
+    expect(prompt).toContain('finding a bit of time does not cause someone to approve a plan');
+    expect(prompt).toContain('avoid repeating it unless repetition is genuinely needed');
+    expect(prompt).toContain('review every cause/effect or logical connection between sentences');
   });
 
   it('keeps the established paragraph length policy for ten requested words', async () => {
@@ -28,7 +49,21 @@ describe('VocabularyGenerateService', () => {
       paragraph, translation: '自然的中文翻译。', usedWords: words,
     });
     expect(provider.generateText).toHaveBeenCalledWith(expect.objectContaining({
-      prompt: expect.stringMatching(/Target 120–130.*required 100–150/s),
+      prompt: expect.stringMatching(/Target 120–130.*required 80–180/s),
+    }));
+  });
+
+  it('uses the wider validation range without changing the target for four to seven words', async () => {
+    const words = ['one', 'two', 'three', 'four', 'five'];
+    const paragraph = paragraphWithCount(50, ...words);
+    const provider = fakeProvider([generatedOutput(words, paragraph)]);
+    const service = new VocabularyGenerateService(new AIModelService([provider]));
+
+    await expect(service.generate({ provider: 'fixture', model: 'model-a', words })).resolves.toEqual({
+      paragraph, translation: '自然的中文翻译。', usedWords: words,
+    });
+    expect(provider.generateText).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: expect.stringMatching(/Target 90–105.*required 50–150/s),
     }));
   });
 
@@ -55,7 +90,7 @@ describe('VocabularyGenerateService', () => {
   it('gives a length-only retry instructions to preserve valid vocabulary usage', async () => {
     const words = ['cat', 'dog'];
     const provider = fakeProvider([
-      generatedOutput(words, paragraphWithCount(49, ...words)),
+      generatedOutput(words, paragraphWithCount(34, ...words)),
       generatedOutput(words, paragraphWithCount(70, ...words)),
     ]);
     const service = new VocabularyGenerateService(new AIModelService([provider]));

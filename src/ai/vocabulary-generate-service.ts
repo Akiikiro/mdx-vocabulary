@@ -96,11 +96,16 @@ function initialPrompt(words: string[]): string {
 
 Requirements:
 - Write one natural, coherent English paragraph for an intermediate learner.
+- Build the paragraph around one simple, plausible story or situation. Each sentence must follow logically from the previous sentences and contribute to that same situation.
+- Give the paragraph a lightweight mini-story arc: establish the situation, introduce one small realistic problem or change, show a reasonable response, and end with an outcome. Do not write a diary-like list of flat actions such as "I did A. Then I did B. Then I did C."
 - Target ${length.targetMin}–${length.targetMax} English words so the paragraph remains safely within the required ${length.min}–${length.max} word range. ${length.sentenceGuidance} Before returning JSON, count the English words and revise the paragraph if it is outside ${length.targetMin}–${length.targetMax} words.
 - Use every requested item itself or only a simple grammatical inflection accepted by the validator (such as a plural, past tense, -ing, comparative, or superlative form).
 - Do not replace a requested item with a derivationally related word. For example, use approve, approves, approved, or approving for "approve"; do not use "approval" as its replacement.
-- Natural collocations matter more than forcing the exact base form.
-- Do not force unrelated items into the same sentence.
+- Use each vocabulary item only where its meaning and common collocations naturally fit the situation. Never invent an unlikely action, decision, or cause-and-effect link merely to include a word.
+- Different vocabulary items may appear in separate sentences; they only need to belong naturally to the same overall situation. Do not force unrelated items into the same sentence or make one vocabulary use the reason for another.
+- Use "so", "because", "therefore", and similar connectors only when there is a genuine cause-and-effect relationship. For example, finding a bit of time does not cause someone to approve a plan, and a friend approving of a recipe does not by itself cause someone to eat more.
+- Once an item has been used naturally, avoid repeating it unless repetition is genuinely needed for a clear, natural connection.
+- Before returning, review every vocabulary use for natural collocation and review every cause/effect or logical connection between sentences. Revise anything a fluent English speaker would find implausible or awkward.
 - Provide a natural Chinese translation of the complete paragraph.
 - Return JSON only, with exactly this shape: {"paragraph":"...","translation":"...","usedWords":["..."]}.
 - Set usedWords to exactly ${JSON.stringify(words)}: preserve every supplied string unchanged and keep one supplied item per JSON array element.
@@ -120,6 +125,7 @@ ${actions.map((action) => `- ${action}`).join('\n')}
 
 Preservation rules:
 - Preserve every already-valid requested vocabulary occurrence in the paragraph. Simple grammatical inflections remain allowed, but derivational replacements do not; for example, "approval" does not satisfy "approve".
+- Any added or edited sentence must fit the same coherent situation, use natural collocations, and maintain plausible logical or cause/effect relationships. Do not add unnecessary vocabulary repetition.
 - Leave paragraph wording unchanged except where a correction action explicitly requires a paragraph edit.
 - Leave usedWords unchanged unless a correction action explicitly requires replacing it.
 - Leave the Chinese translation unchanged if the paragraph is unchanged. If the paragraph changes, update only the corresponding translation text.
@@ -201,12 +207,12 @@ function validateGeneratedResult(text: string, requestedWords: string[]): {
 
 function paragraphLengthPolicy(wordCount: number): ParagraphLengthPolicy {
   if (wordCount <= 3) {
-    return { min: 50, max: 90, targetMin: 65, targetMax: 75, sentenceGuidance: 'Use roughly 5–7 sentences.' };
+    return { min: 35, max: 120, targetMin: 65, targetMax: 75, sentenceGuidance: 'Use roughly 5–7 sentences.' };
   }
   if (wordCount <= 7) {
-    return { min: 75, max: 125, targetMin: 90, targetMax: 105, sentenceGuidance: 'Use roughly 7–9 sentences.' };
+    return { min: 50, max: 150, targetMin: 90, targetMax: 105, sentenceGuidance: 'Use roughly 7–9 sentences.' };
   }
-  return { min: 100, max: 150, targetMin: 120, targetMax: 130, sentenceGuidance: 'Use roughly 10–12 sentences of 10–14 words each.' };
+  return { min: 80, max: 180, targetMin: 120, targetMax: 130, sentenceGuidance: 'Use roughly 10–12 sentences of 10–14 words each.' };
 }
 
 function logGenerationValidation(stage: string, failures: string[]): void {
