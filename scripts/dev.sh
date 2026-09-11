@@ -123,15 +123,39 @@ start_service() {
 
   printf '\n[%s] Starting %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$service" >> "$log"
 
-  # Job control gives the background npm process its own process group. All npm,
-  # shell, and Node descendants inherit it, so stop can terminate the whole tree.
-  set -m
-  (
-    cd "$workdir" || exit 1
-    exec npm run "$script"
-  ) >> "$log" 2>&1 &
-  pid=$!
-  set +m
+  # Node's detached spawn creates a new process group without changing monitor
+  # mode in the caller's terminal. Descendants inherit the group, so stop can
+  # still terminate the complete npm/Node tree by its tracked leader PID.
+  pid=$(/usr/bin/env node -e '
+    const fs = require("node:fs");
+    const { spawn } = require("node:child_process");
+    const [workdir, script, log] = process.argv.slice(1);
+    const output = fs.openSync(log, "a");
+    const child = spawn("npm", ["run", script], {
+      cwd: workdir,
+      env: process.env,
+      detached: true,
+      stdio: ["ignore", output, output],
+    });
+    child.once("error", (error) => {
+      fs.closeSync(output);
+      console.error(error.message);
+      process.exitCode = 1;
+    });
+    child.once("spawn", () => {
+      fs.closeSync(output);
+      process.stdout.write(String(child.pid));
+      child.unref();
+    });
+  ' "$workdir" "$script" "$log") || {
+    printf 'Failed to spawn %s. See %s\n' "$service" "$log" >&2
+    return 1
+  }
+
+  if [[ ! "$pid" =~ ^[1-9][0-9]*$ ]]; then
+    printf 'Failed to start %s safely: invalid child PID. See %s\n' "$service" "$log" >&2
+    return 1
+  fi
 
   pgid=$(/bin/ps -p "$pid" -o pgid= 2>/dev/null | /usr/bin/tr -d ' ')
   if [[ "$pgid" != "$pid" ]]; then
