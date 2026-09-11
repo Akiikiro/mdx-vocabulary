@@ -9,12 +9,15 @@ import { createApiServer } from '../src/http/server.js';
 import { DictionaryPackageStorage } from '../src/storage/dictionary-package-storage.js';
 import { PronunciationAudioError } from '../src/resources/pronunciation-audio-service.js';
 import { EdgeTtsError } from '../src/resources/edge-tts-service.js';
+import { LLMProviderError, type LLMProvider } from '../src/ai/llm-provider.js';
 
 describe('dictionary resource HTTP API', () => {
   const dictionaryA = '11111111-1111-4111-8111-111111111111';
   const dictionaryB = '22222222-2222-4222-8222-222222222222';
   let root: string;
   let server: FastifyInstance;
+  let aiUnavailable = false;
+  let aiGenerationText = validGeneratedParagraph('fixture');
   const lookupResource = vi.fn((volume: string, key: string) => {
     if (volume.includes(dictionaryA) && key === '\\audio\\日本語\\東京.ogg') return Buffer.from('OggSunicode');
     if (volume.includes(dictionaryA) && key === '\\Audio\\Test.OGG') return Buffer.from('OggScase');
@@ -39,6 +42,14 @@ describe('dictionary resource HTTP API', () => {
         : null,
     } } as unknown as PrismaClient;
     const adapter: MddResourceAdapter = { lookupResource, close: vi.fn() };
+    const llmProvider: LLMProvider = {
+      id: 'ollama', displayName: 'Ollama',
+      listModels: async () => {
+        if (aiUnavailable) throw new LLMProviderError('LLM_PROVIDER_UNAVAILABLE', 'private provider detail');
+        return [{ id: 'fixture:latest', displayName: 'fixture:latest' }];
+      },
+      generateText: async (request) => ({ model: request.model, text: aiGenerationText }),
+    };
     server = await createApiServer(database, {
       packageStorage: new DictionaryPackageStorage(root), mddResourceAdapter: adapter,
       pronunciationAudioService: {
@@ -57,6 +68,7 @@ describe('dictionary resource HTTP API', () => {
           return { bytes: Buffer.from('ID3edge'), contentType: 'audio/mpeg', voice: voice === 'female' ? 'en-US-AvaNeural' : 'en-US-BrianNeural', cacheHit: false };
         },
       },
+      llmProviders: [llmProvider],
       startImportJob: () => {},
     });
   });
@@ -152,4 +164,92 @@ describe('dictionary resource HTTP API', () => {
     ]));
     expect(route.responses['200'].content['audio/mpeg'].schema).toEqual({ type: 'string', format: 'binary' });
   });
+
+  it('returns stable AI provider and model DTOs with controlled discovery errors', async () => {
+    const response = await server.inject({ method: 'GET', url: '/api/ai/models' });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ providers: [{
+      id: 'ollama', displayName: 'Ollama', models: [{ id: 'fixture:latest', displayName: 'fixture:latest' }],
+    }] });
+
+    aiUnavailable = true;
+    const unavailable = await server.inject({ method: 'GET', url: '/api/ai/models' });
+    aiUnavailable = false;
+    expect(unavailable.statusCode).toBe(503);
+    expect(unavailable.json()).toEqual({ error: {
+      code: 'AI_PROVIDER_UNAVAILABLE', message: 'AI model discovery is unavailable',
+    } });
+  });
+
+  it('documents the AI model discovery endpoint in OpenAPI', async () => {
+    const response = await server.inject({ method: 'GET', url: '/docs/json' });
+    const route = response.json().paths['/api/ai/models'].get;
+    expect(route.responses['200'].content['application/json'].schema).toEqual(expect.objectContaining({
+      required: ['providers'],
+    }));
+    expect(route.responses['503'].content['application/json'].schema).toEqual(errorSchemaForTest());
+  });
+
+  it('generates a provider-neutral validated vocabulary paragraph', async () => {
+    aiGenerationText = validGeneratedParagraph('fixture');
+    const response = await server.inject({
+      method: 'POST', url: '/api/ai/generate-paragraph',
+      payload: { provider: 'ollama', model: 'fixture:latest', words: ['fixture'] },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({
+      paragraph: paragraphContaining('fixture'), translation: '自然的中文翻译。', usedWords: ['fixture'],
+    });
+
+    const unknownProvider = await server.inject({
+      method: 'POST', url: '/api/ai/generate-paragraph',
+      payload: { provider: 'missing', model: 'fixture:latest', words: ['fixture'] },
+    });
+    expect(unknownProvider.statusCode).toBe(400);
+    expect(unknownProvider.json().error.code).toBe('AI_PROVIDER_NOT_FOUND');
+
+    const malformed = await server.inject({
+      method: 'POST', url: '/api/ai/generate-paragraph',
+      payload: { provider: 'ollama', model: 'fixture:latest', words: [] },
+    });
+    expect(malformed.statusCode).toBe(400);
+    expect(malformed.json().error.code).toBe('INVALID_QUERY');
+  });
+
+  it('returns a controlled error when generated output fails validation twice', async () => {
+    aiGenerationText = 'invalid model output';
+    const response = await server.inject({
+      method: 'POST', url: '/api/ai/generate-paragraph',
+      payload: { provider: 'ollama', model: 'fixture:latest', words: ['fixture'] },
+    });
+    aiGenerationText = validGeneratedParagraph('fixture');
+    expect(response.statusCode).toBe(502);
+    expect(response.json()).toEqual({ error: {
+      code: 'AI_GENERATION_INVALID_RESPONSE',
+      message: 'AI generation did not produce a valid vocabulary paragraph',
+    } });
+  });
+
+  it('documents vocabulary paragraph generation in OpenAPI', async () => {
+    const response = await server.inject({ method: 'GET', url: '/docs/json' });
+    const route = response.json().paths['/api/ai/generate-paragraph'].post;
+    expect(route.requestBody.content['application/json'].schema).toEqual(expect.objectContaining({
+      required: ['provider', 'model', 'words'], additionalProperties: false,
+    }));
+    expect(route.responses['200'].content['application/json'].schema).toEqual(expect.objectContaining({
+      required: ['paragraph', 'translation', 'usedWords'],
+    }));
+  });
 });
+
+function errorSchemaForTest() {
+  return expect.objectContaining({ required: ['error'] });
+}
+
+function paragraphContaining(word: string): string {
+  return [word, ...Array.from({ length: 99 }, () => 'learner')].join(' ');
+}
+
+function validGeneratedParagraph(word: string): string {
+  return JSON.stringify({ paragraph: paragraphContaining(word), translation: '自然的中文翻译。', usedWords: [word] });
+}

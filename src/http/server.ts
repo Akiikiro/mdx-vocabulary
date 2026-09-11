@@ -5,6 +5,13 @@ import multipart from '@fastify/multipart';
 import type { PrismaClient } from '@prisma/client';
 import { createReadStream } from 'node:fs';
 import { spawn } from 'node:child_process';
+import { AIModelService } from '../ai/ai-model-service.js';
+import { LLMProviderError, type LLMProvider } from '../ai/llm-provider.js';
+import { OllamaLLMProvider } from '../ai/ollama-llm-provider.js';
+import {
+  VocabularyGenerateError,
+  VocabularyGenerateService,
+} from '../ai/vocabulary-generate-service.js';
 import { config } from '../config.js';
 import { DictionaryStylesheetCompatibilityService } from '../dictionary-stylesheets/dictionary-stylesheet-compatibility-service.js';
 import {
@@ -53,6 +60,7 @@ interface SearchQuery { q: string; mode?: 'exact' | 'prefix'; limit?: number; of
 interface DictionaryParams { dictionaryId: string }
 interface DictionaryAssetParams extends DictionaryParams { '*': string }
 interface EdgeTtsQuery { word: string; voice: EdgeTtsVoice }
+interface GenerateParagraphBody { provider: string; model: string; words: string[] }
 
 export interface ApiServerOptions {
   startImportJob?: (jobId: string) => void | Promise<void>;
@@ -60,6 +68,7 @@ export interface ApiServerOptions {
   mddResourceAdapter?: MddResourceAdapter;
   pronunciationAudioService?: Pick<PronunciationAudioService, 'getAudio'>;
   edgeTtsService?: Pick<EdgeTtsService, 'getAudio'>;
+  llmProviders?: readonly LLMProvider[];
   detailShadow?: DictionaryDetailShadowHook;
   lazyPrimary?: LazyPrimaryOptions;
 }
@@ -123,6 +132,35 @@ const dictionaryPackageUploadSchema = {
   type: 'object',
   properties: { files: { type: 'array', items: { type: 'string', format: 'binary' } } },
 } as const;
+const aiModelsSchema = {
+  type: 'object', required: ['providers'],
+  properties: {
+    providers: {
+      type: 'array',
+      items: {
+        type: 'object', required: ['id', 'displayName', 'models'],
+        properties: {
+          id: { type: 'string' }, displayName: { type: 'string' },
+          models: {
+            type: 'array',
+            items: {
+              type: 'object', required: ['id', 'displayName'],
+              properties: { id: { type: 'string' }, displayName: { type: 'string' } },
+            },
+          },
+        },
+      },
+    },
+  },
+} as const;
+const generatedParagraphSchema = {
+  type: 'object', required: ['paragraph', 'translation', 'usedWords'],
+  properties: {
+    paragraph: { type: 'string' },
+    translation: { type: 'string' },
+    usedWords: { type: 'array', items: { type: 'string' } },
+  },
+} as const;
 
 function errorBody(code: string, message: string) {
   return { error: { code, message } };
@@ -166,6 +204,8 @@ export async function createApiServer(database: PrismaClient, options: ApiServer
     }
   }
   const vocabularyService = new VocabularyService(database);
+  const aiModelService = new AIModelService(options.llmProviders ?? configuredLLMProviders());
+  const vocabularyGenerateService = new VocabularyGenerateService(aiModelService);
   const packageStorage = options.packageStorage ?? new DictionaryPackageStorage(config.dataDir);
   const mddResourceAdapter = options.mddResourceAdapter ?? new JsMddResourceAdapter();
   const resourceService = new DictionaryResourceService(database, packageStorage, mddResourceAdapter);
@@ -242,6 +282,7 @@ export async function createApiServer(database: PrismaClient, options: ApiServer
         { name: 'entries', description: 'Dictionary entry details' },
         { name: 'resources', description: 'Dictionary-scoped MDD binary resources' },
         { name: 'vocabulary', description: 'Local vocabulary book' },
+        { name: 'ai', description: 'Configured AI providers and models' },
       ],
     },
   });
@@ -253,6 +294,55 @@ export async function createApiServer(database: PrismaClient, options: ApiServer
   await app.register(multipart, {
     limits: { files: 100, fileSize: 2 * 1024 * 1024 * 1024, parts: 100 },
     preservePath: true,
+  });
+
+  app.get('/api/ai/models', {
+    schema: {
+      operationId: 'listAIModels', summary: 'List configured AI providers and available models', tags: ['ai'],
+      response: { 200: aiModelsSchema, 503: errorSchema, 500: errorSchema },
+    },
+  }, async () => {
+    try {
+      return await aiModelService.listModels();
+    } catch (error) {
+      if (error instanceof LLMProviderError) {
+        throw new HttpError(503, 'AI_PROVIDER_UNAVAILABLE', 'AI model discovery is unavailable');
+      }
+      throw error;
+    }
+  });
+
+  app.post<{ Body: GenerateParagraphBody }>('/api/ai/generate-paragraph', {
+    schema: {
+      operationId: 'generateVocabularyParagraph', summary: 'Generate a bilingual vocabulary review paragraph', tags: ['ai'],
+      body: {
+        type: 'object', required: ['provider', 'model', 'words'], additionalProperties: false,
+        properties: {
+          provider: { type: 'string', minLength: 1, maxLength: 200 },
+          model: { type: 'string', minLength: 1, maxLength: 200 },
+          words: {
+            type: 'array', minItems: 1, maxItems: 30,
+            items: { type: 'string', minLength: 1, maxLength: 100 },
+          },
+        },
+      },
+      response: {
+        200: generatedParagraphSchema,
+        400: errorSchema, 502: errorSchema, 503: errorSchema, 500: errorSchema,
+      },
+    },
+  }, async (request) => {
+    try {
+      return await vocabularyGenerateService.generate(request.body);
+    } catch (error) {
+      if (error instanceof VocabularyGenerateError) {
+        const status = error.code === 'AI_PROVIDER_UNAVAILABLE'
+          ? 503
+          : error.code === 'AI_GENERATION_INVALID_RESPONSE' ? 502 : 400;
+        throw new HttpError(status, error.code, error.message);
+      }
+      throw error;
+    }
   });
 
   app.setErrorHandler((error, _request, reply) => {
@@ -627,4 +717,8 @@ function startWorkerProcess(jobId: string): void {
     cwd: process.cwd(), env: process.env, detached: true, stdio: 'ignore',
   });
   child.unref();
+}
+
+function configuredLLMProviders(): LLMProvider[] {
+  return config.ollamaBaseUrl ? [new OllamaLLMProvider(config.ollamaBaseUrl)] : [];
 }

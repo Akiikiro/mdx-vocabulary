@@ -22,6 +22,7 @@
 - Dictionary 可声明可选 stylesheet URL；Oxford 8 使用随 Web 应用发布的 `O8C.css`，恢复 sanitized HTML 中保留 class 所支持的词典样式。前端通过安全的 MDict marker 显示 MDD 图片和发音控件，并在当前 dictionary 内解析内部词条引用。
 - Package 中唯一的 CSS 会自动绑定并由 Fastify dictionary asset route 提供；已知 stylesheet 通过内容 fingerprint 获得 rendering compatibility profile，使重复导入保持相同 override。MDD 资源按 dictionary 保存并由 scoped resource API 按需读取。
 - 单用户本地 Vocabulary Book：收藏词条到 PostgreSQL、持久展示、重新打开完整词条和移除收藏。
+- Provider-neutral AI backend：发现已配置 provider 的 models，并为运行时提供的 vocabulary words 生成经过结构和词汇覆盖校验的中英双语复习段落。
 - Importer、查询服务、HTTP API 的单元及 PostgreSQL integration tests。
 
 ## 架构
@@ -107,6 +108,7 @@ MDD resource foundation 按 dictionary scope 枚举 package 中的 MDD 分卷，
 | `src/entries/dictionary-entry-reprocessing-service.ts` | 从 `entryRaw` 以稳定游标分批重建 sanitized HTML/plain text，并提供 dry-run、进度和失败摘要。 |
 | `src/query/dictionary-query-service.ts` | Exact、prefix、entry detail 查询和一跳 redirect 解析。 |
 | `src/vocabulary/vocabulary-service.ts` | VocabularyItem 添加、列表、去重和移除业务逻辑及公开 DTO。 |
+| `src/ai/` | Provider-neutral LLM contract、AI model discovery service 和 Ollama adapter；prompt 与 Vocabulary 业务逻辑不进入 provider 层。 |
 | `src/query/lazy-dictionary-detail-poc-service.ts` | 非默认 Hybrid POC path；只读验证现有 entry UUID 到 MDX locator 的映射，并执行 lazy transform/sanitize，不注册公开 route。 |
 | `src/query/dictionary-detail-shadow-verifier.ts` | 默认关闭的 detail dual-read shadow；保持 stored DTO 响应不变，按确定性采样隔离执行 lazy parity 并输出不含 HTML/path 的结构化结果。 |
 | `src/query/lazy-detail-diagnostic-service.ts` | Dictionary-scoped、零写入、有限并发的 persisted-locator parity sampling 与 latency 汇总。 |
@@ -155,6 +157,7 @@ cp .env.example .env
 DATABASE_URL="postgresql://aki@localhost:5432/mdx_vocabulary?schema=public"
 APP_DATA_DIR="./data"
 IMPORT_BATCH_SIZE="100"
+OLLAMA_BASE_URL="http://127.0.0.1:11434"
 ```
 
 环境变量：
@@ -164,6 +167,7 @@ IMPORT_BATCH_SIZE="100"
 | `DATABASE_URL` | 是 | Prisma PostgreSQL connection URL。 |
 | `APP_DATA_DIR` | 否 | 保存导入 MDX 的目录，默认 `./data`。 |
 | `IMPORT_BATCH_SIZE` | 否 | 每次批量写入的 entry 数量，默认 `100`。 |
+| `OLLAMA_BASE_URL` | 否 | Ollama 服务的 HTTP(S) base URL；配置后启用 Ollama model discovery。 |
 | `HOST` | 否 | Fastify bind host，默认 `127.0.0.1`。 |
 | `PORT` | 否 | Fastify port，默认 `3000`。 |
 
@@ -294,6 +298,8 @@ http://127.0.0.1:3000
 | GET | `/api/dictionaries/:dictionaryId/resources/*` | 按大小写敏感的 Unicode 逻辑路径精确读取该 dictionary 的 MDD resource bytes。 |
 | GET | `/api/dictionaries/:dictionaryId/browser-audio/*` | 将经过校验的 Ogg/Speex 发音资源按需转换为浏览器兼容的 mono MP3，并使用包/内容身份感知的磁盘缓存。 |
 | GET | `/api/experimental/edge-tts?word=<word>&voice=female|male` | 实验性 Edge TTS 发音；女性固定使用 `en-US-AvaNeural`，男性固定使用 `en-US-BrianNeural`，生成并分别缓存 MP3。 |
+| GET | `/api/ai/models` | 返回已配置 AI providers 及动态发现的 models；响应使用应用自有稳定 DTO。 |
+| POST | `/api/ai/generate-paragraph` | 接受运行时 `{ provider, model, words }`，返回 `{ paragraph, translation, usedWords }`；无效生成最多纠正重试一次。 |
 | GET | `/api/dictionaries/:dictionaryId/search` | 搜索指定 ready dictionary；支持 `q`、`mode`、`limit`、`offset`。 |
 | GET | `/api/entries/:entryId` | 获取 entry detail 和 sanitized HTML。 |
 | GET | `/api/vocabulary` | 按添加时间倒序列出收藏及其安全 entry 摘要。 |
