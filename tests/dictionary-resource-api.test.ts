@@ -247,7 +247,7 @@ function errorSchemaForTest() {
 }
 
 function paragraphContaining(word: string): string {
-  return [word, ...Array.from({ length: 99 }, () => 'learner')].join(' ');
+  return [word, ...Array.from({ length: 69 }, () => 'learner')].join(' ');
 }
 
 function validGeneratedParagraph(word: string): string {

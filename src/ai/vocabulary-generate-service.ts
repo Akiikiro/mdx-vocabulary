@@ -1,10 +1,16 @@
 import { AIModelService } from './ai-model-service.js';
 import { LLMProviderError } from './llm-provider.js';
 
-const MIN_PARAGRAPH_WORDS = 100;
-const MAX_PARAGRAPH_WORDS = 150;
 const MAX_VOCABULARY_ITEMS = 30;
 const MAX_VOCABULARY_ITEM_LENGTH = 100;
+
+interface ParagraphLengthPolicy {
+  min: number;
+  max: number;
+  targetMin: number;
+  targetMax: number;
+  sentenceGuidance: string;
+}
 
 export interface VocabularyGenerateRequest {
   provider: string;
@@ -56,16 +62,19 @@ export class VocabularyGenerateService {
         maxOutputTokens: 900,
       });
       const firstValidation = validateGeneratedResult(first.text, words);
+      logGenerationValidation('first', firstValidation.errors);
       if (firstValidation.result) return firstValidation.result;
 
+      logGenerationValidation('retry_started', firstValidation.errors);
       const corrected = await provider.generateText({
         model: modelId,
         prompt: correctionPrompt(words, first.text, firstValidation.errors),
         responseFormat: 'json',
-        temperature: 0.4,
+        temperature: 0,
         maxOutputTokens: 900,
       });
       const correctedValidation = validateGeneratedResult(corrected.text, words);
+      logGenerationValidation('retry', correctedValidation.errors);
       if (correctedValidation.result) return correctedValidation.result;
       throw new VocabularyGenerateError(
         'AI_GENERATION_INVALID_RESPONSE',
@@ -82,11 +91,12 @@ export class VocabularyGenerateService {
 }
 
 function initialPrompt(words: string[]): string {
+  const length = paragraphLengthPolicy(words.length);
   return `Create one vocabulary-learning result using every requested vocabulary item.
 
 Requirements:
 - Write one natural, coherent English paragraph for an intermediate learner.
-- Target 120–130 English words so the paragraph remains safely within the required 100–150 word range. Use roughly 10–12 sentences of 10–14 words each. Before returning JSON, count the English words and revise the paragraph if it is outside 120–130 words.
+- Target ${length.targetMin}–${length.targetMax} English words so the paragraph remains safely within the required ${length.min}–${length.max} word range. ${length.sentenceGuidance} Before returning JSON, count the English words and revise the paragraph if it is outside ${length.targetMin}–${length.targetMax} words.
 - Use every requested item itself or only a simple grammatical inflection accepted by the validator (such as a plural, past tense, -ing, comparative, or superlative form).
 - Do not replace a requested item with a derivationally related word. For example, use approve, approves, approved, or approving for "approve"; do not use "approval" as its replacement.
 - Natural collocations matter more than forcing the exact base form.
@@ -101,17 +111,19 @@ ${JSON.stringify(words)}`;
 }
 
 function correctionPrompt(words: string[], previousOutput: string, errors: string[]): string {
-  return `Correct the previous vocabulary-learning result by fixing every listed validation failure and only those failures. Preserve all requested vocabulary items and all already-valid parts of the result.
+  const length = paragraphLengthPolicy(words.length);
+  const actions = correctionActions(words, errors, length);
+  return `Correct the previous vocabulary-learning result with minimal edits. Do not freely rewrite content that already passes validation.
 
-The result must follow these requirements:
-- Write one natural, coherent English paragraph for an intermediate learner, targeting 120–130 English words so it remains safely within the required 100–150 word range. Use roughly 10–12 sentences of 10–14 words each.
-- Use every requested item itself or only a simple grammatical inflection accepted by the validator (such as a plural, past tense, -ing, comparative, or superlative form).
-- Do not use derivational replacements. For example, "approval" does not satisfy the requested item "approve"; use approve, approves, approved, or approving instead.
-- Keep every requested item represented even while correcting the listed failures, and prioritize natural collocations.
-- A natural Chinese translation of the complete paragraph.
-- JSON only with exactly: {"paragraph":"...","translation":"...","usedWords":["..."]}.
-- Set usedWords to exactly ${JSON.stringify(words)}: copy every supplied string unchanged, in the supplied order, with one item per JSON array element. Do not combine, split, correct, inflect, or rewrite these strings.
-- No grammar analysis, Markdown, code fences, or commentary.
+Correction actions—perform exactly these actions and no others:
+${actions.map((action) => `- ${action}`).join('\n')}
+
+Preservation rules:
+- Preserve every already-valid requested vocabulary occurrence in the paragraph. Simple grammatical inflections remain allowed, but derivational replacements do not; for example, "approval" does not satisfy "approve".
+- Leave paragraph wording unchanged except where a correction action explicitly requires a paragraph edit.
+- Leave usedWords unchanged unless a correction action explicitly requires replacing it.
+- Leave the Chinese translation unchanged if the paragraph is unchanged. If the paragraph changes, update only the corresponding translation text.
+- Return strict JSON only with exactly: {"paragraph":"...","translation":"...","usedWords":["..."]}. No Markdown, code fences, analysis, or commentary.
 
 Requested vocabulary items:
 ${JSON.stringify(words)}
@@ -119,11 +131,28 @@ ${JSON.stringify(words)}
 Validation problems:
 ${JSON.stringify(errors)}
 
-Fix each validation problem above explicitly. Do not omit or replace any requested vocabulary item while making the correction.
-If paragraph length is listed as a problem, extend or rewrite the paragraph with natural supporting details until it contains 120–130 English words; count the words before returning it. Never return the previous output unchanged when any validation problem is listed.
-
 Previous output:
 ${previousOutput}`;
+}
+
+function correctionActions(
+  words: string[],
+  errors: string[],
+  length: ParagraphLengthPolicy,
+): string[] {
+  return errors.map((error) => {
+    if (error.startsWith('paragraph must contain ')) {
+      return `Fix paragraph length only: preserve its existing vocabulary usage and wording, then append natural supporting details if too short or trim only unnecessary wording if too long. Make the final paragraph ${length.targetMin}–${length.targetMax} English words and count it before responding. Copy the already-valid usedWords array unchanged as ${JSON.stringify(words)}.`;
+    }
+    if (error === 'usedWords does not match the requested vocabulary items' || error === 'usedWords must be an array of strings') {
+      return `Replace usedWords only by copying this exact JSON array verbatim: ${JSON.stringify(words)}. Keep one supplied string per array item without combining, splitting, inflecting, correcting, or retyping it.`;
+    }
+    if (error.startsWith('paragraph is missing requested items:')) {
+      const missing = error.slice('paragraph is missing requested items:'.length).trim();
+      return `Repair paragraph coverage only for these missing items: ${missing}. Add or minimally edit only the sentences needed to use each missing item itself or a simple accepted inflection; preserve every already-valid vocabulary occurrence and avoid derivational replacements.`;
+    }
+    return `Fix only this validation problem while preserving every other field and already-valid detail: ${error}.`;
+  });
 }
 
 function validateGeneratedResult(text: string, requestedWords: string[]): {
@@ -150,8 +179,9 @@ function validateGeneratedResult(text: string, requestedWords: string[]): {
   if (!reportedWords) errors.push('usedWords must be an array of strings');
 
   const paragraphWords = lexicalTokens(paragraph);
-  if (paragraphWords.length < MIN_PARAGRAPH_WORDS || paragraphWords.length > MAX_PARAGRAPH_WORDS) {
-    errors.push(`paragraph must contain ${MIN_PARAGRAPH_WORDS}–${MAX_PARAGRAPH_WORDS} English words`);
+  const length = paragraphLengthPolicy(requestedWords.length);
+  if (paragraphWords.length < length.min || paragraphWords.length > length.max) {
+    errors.push(`paragraph must contain ${length.min}–${length.max} English words`);
   }
   const missingWords = requestedWords.filter((word) => !containsVocabularyItem(paragraphWords, lexicalTokens(word)));
   if (missingWords.length) errors.push(`paragraph is missing requested items: ${missingWords.join(', ')}`);
@@ -167,6 +197,21 @@ function validateGeneratedResult(text: string, requestedWords: string[]): {
   return errors.length
     ? { result: null, errors }
     : { result: { paragraph, translation, usedWords: [...requestedWords] }, errors: [] };
+}
+
+function paragraphLengthPolicy(wordCount: number): ParagraphLengthPolicy {
+  if (wordCount <= 3) {
+    return { min: 50, max: 90, targetMin: 65, targetMax: 75, sentenceGuidance: 'Use roughly 5–7 sentences.' };
+  }
+  if (wordCount <= 7) {
+    return { min: 75, max: 125, targetMin: 90, targetMax: 105, sentenceGuidance: 'Use roughly 7–9 sentences.' };
+  }
+  return { min: 100, max: 150, targetMin: 120, targetMax: 130, sentenceGuidance: 'Use roughly 10–12 sentences of 10–14 words each.' };
+}
+
+function logGenerationValidation(stage: string, failures: string[]): void {
+  if (process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'test') return;
+  console.info(JSON.stringify({ event: 'vocabulary_generation_validation', stage, failures }));
 }
 
 function validateWords(input: string[]): string[] {

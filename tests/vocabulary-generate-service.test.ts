@@ -5,7 +5,7 @@ import { VocabularyGenerateService } from '../src/ai/vocabulary-generate-service
 
 describe('VocabularyGenerateService', () => {
   it('uses a runtime-selected provider/model and validates inflected coverage', async () => {
-    const paragraph = paragraphWith('studies', 'planned');
+    const paragraph = paragraphWithCount(70, 'studies', 'planned');
     const provider = fakeProvider([generatedOutput(['study', 'plan'], paragraph)]);
     const service = new VocabularyGenerateService(new AIModelService([provider]));
 
@@ -13,15 +13,29 @@ describe('VocabularyGenerateService', () => {
       .resolves.toEqual({ paragraph, translation: '自然的中文翻译。', usedWords: ['study', 'plan'] });
     expect(provider.generateText).toHaveBeenCalledWith(expect.objectContaining({
       model: 'model-b', responseFormat: 'json', prompt: expect.stringMatching(
-        /Target 120–130.*Do not replace.*Set usedWords to exactly \["study","plan"\]/s,
+        /Target 65–75.*required 50–90.*Do not replace.*Set usedWords to exactly \["study","plan"\]/s,
       ),
+    }));
+  });
+
+  it('keeps the established paragraph length policy for ten requested words', async () => {
+    const words = ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
+    const paragraph = paragraphWithCount(100, ...words);
+    const provider = fakeProvider([generatedOutput(words, paragraph)]);
+    const service = new VocabularyGenerateService(new AIModelService([provider]));
+
+    await expect(service.generate({ provider: 'fixture', model: 'model-a', words })).resolves.toEqual({
+      paragraph, translation: '自然的中文翻译。', usedWords: words,
+    });
+    expect(provider.generateText).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: expect.stringMatching(/Target 120–130.*required 100–150/s),
     }));
   });
 
   it('retries once with validation feedback and returns the corrected result', async () => {
     const provider = fakeProvider([
-      generatedOutput(['cat'], paragraphWith('dog')),
-      generatedOutput(['cat'], paragraphWith('cats')),
+      generatedOutput(['cat'], paragraphWithCount(70, 'dog')),
+      generatedOutput(['cat'], paragraphWithCount(70, 'cats')),
     ]);
     const service = new VocabularyGenerateService(new AIModelService([provider]));
 
@@ -30,13 +44,50 @@ describe('VocabularyGenerateService', () => {
     expect(provider.generateText).toHaveBeenCalledTimes(2);
     expect(provider.generateText).toHaveBeenNthCalledWith(2, expect.objectContaining({
       prompt: expect.stringMatching(
-        /only those failures.*"approval" does not satisfy.*Set usedWords to exactly \["cat"\].*paragraph is missing requested items: cat.*Never return the previous output unchanged/s,
+        /minimal edits.*Repair paragraph coverage only for these missing items: cat.*preserve every already-valid vocabulary occurrence/s,
       ),
     }));
+    const correctionPrompt = vi.mocked(provider.generateText).mock.calls[1]?.[0].prompt ?? '';
+    expect(correctionPrompt).not.toContain('Fix paragraph length only');
+    expect(correctionPrompt).not.toContain('Replace usedWords only');
+  });
+
+  it('gives a length-only retry instructions to preserve valid vocabulary usage', async () => {
+    const words = ['cat', 'dog'];
+    const provider = fakeProvider([
+      generatedOutput(words, paragraphWithCount(49, ...words)),
+      generatedOutput(words, paragraphWithCount(70, ...words)),
+    ]);
+    const service = new VocabularyGenerateService(new AIModelService([provider]));
+
+    await service.generate({ provider: 'fixture', model: 'model-a', words });
+    const prompt = vi.mocked(provider.generateText).mock.calls[1]?.[0].prompt ?? '';
+    expect(prompt).toContain('Fix paragraph length only: preserve its existing vocabulary usage and wording');
+    expect(prompt).toContain('Make the final paragraph 65–75 English words');
+    expect(prompt).toContain('Copy the already-valid usedWords array unchanged as ["cat","dog"]');
+    expect(prompt).not.toContain('Replace usedWords only');
+    expect(prompt).not.toContain('Repair paragraph coverage only');
+    expect(provider.generateText).toHaveBeenNthCalledWith(2, expect.objectContaining({ temperature: 0 }));
+  });
+
+  it('gives a usedWords-only retry the exact supplied array without requesting paragraph edits', async () => {
+    const words = ['cat', 'dog'];
+    const paragraph = paragraphWithCount(70, ...words);
+    const provider = fakeProvider([
+      generatedOutput(['cat,dog'], paragraph),
+      generatedOutput(words, paragraph),
+    ]);
+    const service = new VocabularyGenerateService(new AIModelService([provider]));
+
+    await service.generate({ provider: 'fixture', model: 'model-a', words });
+    const prompt = vi.mocked(provider.generateText).mock.calls[1]?.[0].prompt ?? '';
+    expect(prompt).toContain('Replace usedWords only by copying this exact JSON array verbatim: ["cat","dog"]');
+    expect(prompt).not.toContain('Fix paragraph length only');
+    expect(prompt).not.toContain('Repair paragraph coverage only');
   });
 
   it('rejects output that still fails validation after one retry', async () => {
-    const provider = fakeProvider(['not json', generatedOutput(['cat'], paragraphWith('dog'))]);
+    const provider = fakeProvider(['not json', generatedOutput(['cat'], paragraphWithCount(70, 'dog'))]);
     const service = new VocabularyGenerateService(new AIModelService([provider]));
     await expect(service.generate({ provider: 'fixture', model: 'model-a', words: ['cat'] })).rejects.toMatchObject({
       code: 'AI_GENERATION_INVALID_RESPONSE',
@@ -68,8 +119,8 @@ function fakeProvider(outputs: string[]): LLMProvider {
   };
 }
 
-function paragraphWith(...featuredWords: string[]): string {
-  return [...featuredWords, ...Array.from({ length: 100 - featuredWords.length }, () => 'learner')].join(' ');
+function paragraphWithCount(count: number, ...featuredWords: string[]): string {
+  return [...featuredWords, ...Array.from({ length: count - featuredWords.length }, () => 'learner')].join(' ');
 }
 
 function generatedOutput(usedWords: string[], paragraph: string): string {
