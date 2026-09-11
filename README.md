@@ -22,7 +22,7 @@
 - Dictionary 可声明可选 stylesheet URL；Oxford 8 使用随 Web 应用发布的 `O8C.css`，恢复 sanitized HTML 中保留 class 所支持的词典样式。前端通过安全的 MDict marker 显示 MDD 图片和发音控件，并在当前 dictionary 内解析内部词条引用。
 - Package 中唯一的 CSS 会自动绑定并由 Fastify dictionary asset route 提供；已知 stylesheet 通过内容 fingerprint 获得 rendering compatibility profile，使重复导入保持相同 override。MDD 资源按 dictionary 保存并由 scoped resource API 按需读取。
 - 单用户本地 Vocabulary Book：收藏词条到 PostgreSQL、持久展示、重新打开完整词条和移除收藏。
-- Provider-neutral AI backend：发现已配置 provider 的 models，并为运行时提供的 vocabulary words 生成经过结构和词汇覆盖校验的中英双语复习段落。
+- Vocabulary Book 可勾选已收藏词条，动态选择已配置的 AI provider/model，并生成经过结构和词汇覆盖校验的中英双语复习段落。
 - Importer、查询服务、HTTP API 的单元及 PostgreSQL integration tests。
 
 ## 架构

@@ -30,6 +30,23 @@ export interface VocabularyItem {
   entry: SearchEntry;
 }
 
+export interface AIModel {
+  id: string;
+  displayName: string;
+}
+
+export interface AIProviderModels {
+  id: string;
+  displayName: string;
+  models: AIModel[];
+}
+
+export interface GeneratedVocabularyParagraph {
+  paragraph: string;
+  translation: string;
+  usedWords: string[];
+}
+
 export interface DictionaryPackageImport {
   dictionaryId: string;
   jobId: string;
@@ -102,6 +119,22 @@ export function getEntry(entryId: string, signal?: AbortSignal): Promise<EntryDe
 
 export async function listVocabulary(): Promise<VocabularyItem[]> {
   return (await getJson<{ items: VocabularyItem[] }>('/api/vocabulary')).items;
+}
+
+export async function listAIModels(): Promise<AIProviderModels[]> {
+  return (await getJson<{ providers: AIProviderModels[] }>('/api/ai/models')).providers;
+}
+
+export function generateVocabularyParagraph(
+  provider: string,
+  model: string,
+  words: string[],
+): Promise<GeneratedVocabularyParagraph> {
+  return requestJson<GeneratedVocabularyParagraph>('/api/ai/generate-paragraph', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ provider, model, words }),
+  });
 }
 
 export function addVocabulary(entryId: string): Promise<VocabularyItem> {

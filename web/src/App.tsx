@@ -1,15 +1,19 @@
 import { type KeyboardEvent, useEffect, useRef, useState } from 'react';
 import {
   addVocabulary,
+  generateVocabularyParagraph,
   getEntry,
   getDictionaryImportStatus,
   importDictionaryPackage,
   listDictionaries,
+  listAIModels,
   listVocabulary,
   removeVocabulary,
   searchEntries,
+  type AIProviderModels,
   type Dictionary,
   type EntryDetail,
+  type GeneratedVocabularyParagraph,
   type SearchEntry,
   type VocabularyItem,
 } from './api';
@@ -30,10 +34,18 @@ export function App() {
   const [detail, setDetail] = useState<EntryDetail | null>(null);
   const [detailExpanded, setDetailExpanded] = useState(true);
   const [vocabulary, setVocabulary] = useState<VocabularyItem[]>([]);
+  const [selectedVocabularyIds, setSelectedVocabularyIds] = useState<string[]>([]);
+  const [aiProviders, setAIProviders] = useState<AIProviderModels[]>([]);
+  const [aiProviderId, setAIProviderId] = useState('');
+  const [aiModelId, setAIModelId] = useState('');
+  const [generatedParagraph, setGeneratedParagraph] = useState<GeneratedVocabularyParagraph | null>(null);
   const [loadingDictionaries, setLoadingDictionaries] = useState(true);
   const [searching, setSearching] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [loadingVocabulary, setLoadingVocabulary] = useState(true);
+  const [loadingAIModels, setLoadingAIModels] = useState(true);
+  const [generatingParagraph, setGeneratingParagraph] = useState(false);
+  const [generationError, setGenerationError] = useState('');
   const [savingVocabulary, setSavingVocabulary] = useState(false);
   const [removingVocabularyId, setRemovingVocabularyId] = useState('');
   const [autocompleteCompleted, setAutocompleteCompleted] = useState(false);
@@ -67,6 +79,25 @@ export function App() {
       })
       .finally(() => {
         if (active) setLoadingDictionaries(false);
+      });
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    listAIModels()
+      .then((providers) => {
+        if (!active) return;
+        setAIProviders(providers);
+        const provider = providers.find((candidate) => candidate.models.length > 0) ?? providers[0];
+        setAIProviderId(provider?.id ?? '');
+        setAIModelId(provider?.models[0]?.id ?? '');
+      })
+      .catch((reason: unknown) => {
+        if (active) setGenerationError(messageFrom(reason));
+      })
+      .finally(() => {
+        if (active) setLoadingAIModels(false);
       });
     return () => { active = false; };
   }, []);
@@ -251,6 +282,7 @@ export function App() {
     try {
       await removeVocabulary(item.id);
       setVocabulary((current) => current.filter((candidate) => candidate.id !== item.id));
+      setSelectedVocabularyIds((current) => current.filter((id) => id !== item.id));
     } catch (reason) {
       setError(messageFrom(reason));
     } finally {
@@ -261,6 +293,38 @@ export function App() {
   function openVocabularyEntry(item: VocabularyItem) {
     setCurrentView('dictionary');
     void selectEntry(item.entry);
+  }
+
+  function toggleVocabularySelection(id: string) {
+    setSelectedVocabularyIds((current) => current.includes(id)
+      ? current.filter((candidate) => candidate !== id)
+      : [...current, id]);
+    setGenerationError('');
+  }
+
+  function selectAIProvider(providerId: string) {
+    const provider = aiProviders.find((candidate) => candidate.id === providerId);
+    setAIProviderId(providerId);
+    setAIModelId(provider?.models[0]?.id ?? '');
+    setGenerationError('');
+  }
+
+  async function generateParagraph() {
+    const selectedWords = vocabulary
+      .filter((item) => selectedVocabularyIds.includes(item.id))
+      .map((item) => item.entry.headword);
+    if (!selectedWords.length || !aiProviderId || !aiModelId) return;
+
+    setGeneratingParagraph(true);
+    setGenerationError('');
+    setGeneratedParagraph(null);
+    try {
+      setGeneratedParagraph(await generateVocabularyParagraph(aiProviderId, aiModelId, selectedWords));
+    } catch (reason) {
+      setGenerationError(messageFrom(reason));
+    } finally {
+      setGeneratingParagraph(false);
+    }
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
@@ -289,6 +353,12 @@ export function App() {
   const currentVocabularyItem = detail
     ? vocabulary.find((item) => item.entryId === detail.id)
     : undefined;
+  const selectedAIProvider = aiProviders.find((provider) => provider.id === aiProviderId);
+  const validAIModel = selectedAIProvider?.models.some((model) => model.id === aiModelId) ?? false;
+  const canGenerate = selectedVocabularyIds.length > 0
+    && Boolean(selectedAIProvider)
+    && validAIModel
+    && !generatingParagraph;
 
   return (
     <main className="page-shell">
@@ -480,9 +550,72 @@ export function App() {
           <p className="placeholder">Words you add will appear here.</p>
         )}
         {vocabulary.length > 0 && (
+          <div className="vocabulary-generator" aria-labelledby="vocabulary-generator-heading">
+            <div className="generator-heading-row">
+              <div>
+                <h3 id="vocabulary-generator-heading">Generate review paragraph</h3>
+                <p>Select saved words, then choose an available model.</p>
+              </div>
+              <span>{selectedVocabularyIds.length} selected</span>
+            </div>
+            <div className="generator-controls">
+              <label className="field">
+                <span>Provider</span>
+                <select
+                  value={aiProviderId}
+                  disabled={loadingAIModels || generatingParagraph || aiProviders.length === 0}
+                  onChange={(event) => selectAIProvider(event.target.value)}
+                >
+                  {aiProviders.length === 0 && <option value="">No providers available</option>}
+                  {aiProviders.map((provider) => (
+                    <option key={provider.id} value={provider.id}>{provider.displayName}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Model</span>
+                <select
+                  value={aiModelId}
+                  disabled={loadingAIModels || generatingParagraph || !selectedAIProvider?.models.length}
+                  onChange={(event) => {
+                    setAIModelId(event.target.value);
+                    setGenerationError('');
+                  }}
+                >
+                  {!selectedAIProvider?.models.length && <option value="">No models available</option>}
+                  {selectedAIProvider?.models.map((model) => (
+                    <option key={model.id} value={model.id}>{model.displayName}</option>
+                  ))}
+                </select>
+              </label>
+              <button className="primary-button generator-button" type="button" disabled={!canGenerate} onClick={() => void generateParagraph()}>
+                {generatingParagraph ? 'Generating…' : 'Generate'}
+              </button>
+            </div>
+            {loadingAIModels && <p className="status" role="status">Loading AI models…</p>}
+            {generationError && <p className="error generator-error" role="alert">{generationError}</p>}
+            {generatedParagraph && (
+              <article className="generated-result" aria-live="polite">
+                <h3>English paragraph</h3>
+                <p>{generatedParagraph.paragraph}</p>
+                <h3>Chinese translation</h3>
+                <p lang="zh-CN">{generatedParagraph.translation}</p>
+              </article>
+            )}
+          </div>
+        )}
+        {vocabulary.length > 0 && (
           <ul className="vocabulary-list">
             {vocabulary.map((item) => (
               <li key={item.id}>
+                <input
+                  className="vocabulary-checkbox"
+                  type="checkbox"
+                  aria-label={`Select ${item.entry.headword} for generation`}
+                  checked={selectedVocabularyIds.includes(item.id)}
+                  disabled={generatingParagraph}
+                  onChange={() => toggleVocabularySelection(item.id)}
+                />
                 <button className="vocabulary-headword" type="button" onClick={() => openVocabularyEntry(item)}>
                   {item.entry.headword}
                 </button>

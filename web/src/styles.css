@@ -61,11 +61,25 @@ h2 { margin: 0 0 18px; font-size: 1.05rem; }
 .secondary-button { background: #fff; color: #176448; }
 .primary-button:disabled { border-color: #aab5af; background: #e9eeeb; color: #52615a; cursor: default; }
 .vocabulary-list { margin: 0; padding: 0; list-style: none; }
-.vocabulary-list li { display: grid; grid-template-columns: minmax(160px, 1fr) auto auto; gap: 16px; align-items: center; padding: 13px 0; border-top: 1px solid #eceae4; }
+.vocabulary-list li { display: grid; grid-template-columns: auto minmax(160px, 1fr) auto auto; gap: 16px; align-items: center; padding: 13px 0; border-top: 1px solid #eceae4; }
 .vocabulary-list li:first-child { border-top: 0; }
+.vocabulary-checkbox { width: 1.05rem; height: 1.05rem; accent-color: #176448; cursor: pointer; }
 .vocabulary-headword { width: fit-content; border: 0; background: transparent; color: #176448; padding: 0; font-family: Georgia, serif; font-size: 1.15rem; font-weight: 700; text-align: left; cursor: pointer; }
 .vocabulary-list time { color: #758078; font-size: .8rem; }
 .remove-button { border-color: #c8a39d; background: #fff; color: #8d3b2e; }
+.vocabulary-generator { margin-bottom: 18px; padding: 18px; border: 1px solid #dfe5e1; border-radius: 10px; background: #f7f9f7; }
+.generator-heading-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+.generator-heading-row h3 { margin: 0 0 4px; font-size: 1rem; }
+.generator-heading-row p { margin: 0; color: #758078; font-size: .82rem; }
+.generator-heading-row > span { color: #176448; font-size: .8rem; font-weight: 700; white-space: nowrap; }
+.generator-controls { display: grid; grid-template-columns: minmax(150px, .8fr) minmax(200px, 1.2fr) auto; gap: 12px; align-items: end; }
+.generator-controls .field select { padding: 9px 11px; }
+.generator-button { min-height: 38px; }
+.generator-error { margin-bottom: 0; }
+.generated-result { margin-top: 18px; padding-top: 18px; border-top: 1px solid #dfe5e1; }
+.generated-result h3 { margin: 0 0 6px; color: #176448; font-size: .88rem; }
+.generated-result p { margin: 0 0 16px; line-height: 1.7; }
+.generated-result p:last-child { margin-bottom: 0; }
 .dictionary-entry { overflow-wrap: anywhere; color: #26342e; font-family: Georgia, "Times New Roman", serif; font-size: 1.02rem; line-height: 1.75; }
 .dictionary-entry.collapsed { position: relative; max-height: 220px; overflow: hidden; }
 .dictionary-entry.collapsed::after { position: absolute; right: 0; bottom: 0; left: 0; height: 72px; background: linear-gradient(to bottom, rgb(255 255 255 / 0%), #fff); content: ""; pointer-events: none; }
@@ -113,7 +127,9 @@ h2 { margin: 0 0 18px; font-size: 1.05rem; }
   .package-summary dl { grid-template-columns: 1fr; }
   .detail-heading-row { align-items: flex-start; flex-direction: column; }
   .detail-actions { flex-wrap: wrap; }
-  .vocabulary-list li { grid-template-columns: 1fr auto; }
-  .vocabulary-list time { grid-column: 1; grid-row: 2; }
-  .remove-button { grid-column: 2; grid-row: 1 / span 2; }
+  .generator-controls { grid-template-columns: 1fr; }
+  .generator-button { width: 100%; }
+  .vocabulary-list li { grid-template-columns: auto 1fr auto; }
+  .vocabulary-list time { grid-column: 2; grid-row: 2; }
+  .remove-button { grid-column: 3; grid-row: 1 / span 2; }
 }
