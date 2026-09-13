@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="500" viewBox="0 0 960 500" role="img" aria-labelledby="title desc">
+  <title id="title">Cold vs warm TTFT at common populated-context points</title>
+  <desc id="desc">Line chart comparing cold and warm time to first token for 96K and 128K variants.</desc>
+  <rect width="960" height="500" fill="#fff"/>
+  <style>
+    text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #24292f; }
+    .title { font-size: 21px; font-weight: 600; }
+    .axis-title { font-size: 15px; font-weight: 600; }
+    .tick { font-size: 13px; fill: #57606a; }
+    .legend { font-size: 12px; }
+    .grid { stroke: #d8dee4; stroke-width: 1; }
+    .axis { stroke: #57606a; stroke-width: 1.5; }
+  </style>
+  <text class="title" x="480" y="29" text-anchor="middle">Cold vs warm TTFT at common populated-context points</text>
+  <g class="legend">
+    <line x1="255" y1="58" x2="280" y2="58" stroke="#0969da" stroke-width="3"/><text x="287" y="62">96K cold</text>
+    <line x1="375" y1="58" x2="400" y2="58" stroke="#54aeff" stroke-width="3"/><text x="407" y="62">96K warm</text>
+    <line x1="505" y1="58" x2="530" y2="58" stroke="#cf222e" stroke-width="3"/><text x="537" y="62">128K cold</text>
+    <line x1="635" y1="58" x2="660" y2="58" stroke="#ff8182" stroke-width="3"/><text x="667" y="62">128K warm</text>
+  </g>
+
+  <g class="grid">
+    <line x1="140" y1="410" x2="860" y2="410"/><line x1="140" y1="367.14" x2="860" y2="367.14"/>
+    <line x1="140" y1="324.29" x2="860" y2="324.29"/><line x1="140" y1="281.43" x2="860" y2="281.43"/>
+    <line x1="140" y1="238.57" x2="860" y2="238.57"/><line x1="140" y1="195.71" x2="860" y2="195.71"/>
+    <line x1="140" y1="152.86" x2="860" y2="152.86"/><line x1="140" y1="110" x2="860" y2="110"/>
+  </g>
+  <line class="axis" x1="140" y1="110" x2="140" y2="410"/><line class="axis" x1="140" y1="410" x2="860" y2="410"/>
+  <g class="tick" text-anchor="end">
+    <text x="121" y="415">0</text><text x="121" y="372.14">10</text><text x="121" y="329.29">20</text><text x="121" y="286.43">30</text>
+    <text x="121" y="243.57">40</text><text x="121" y="200.71">50</text><text x="121" y="157.86">60</text><text x="121" y="115">70</text>
+  </g>
+  <g class="tick" text-anchor="middle">
+    <text x="140" y="435">1K</text><text x="320" y="435">8K</text><text x="500" y="435">16K</text>
+    <text x="680" y="435">32K</text><text x="860" y="435">64K</text>
+  </g>
+  <text class="axis-title" x="500" y="474" text-anchor="middle">Populated context</text>
+  <text class="axis-title" x="34" y="260" text-anchor="middle" transform="rotate(-90 34 260)">Average TTFT (seconds)</text>
+
+  <polyline points="140,388.96 320,371.00 500,349.40 680,294.54 860,138.54" fill="none" stroke="#0969da" stroke-width="3"/>
+  <polyline points="140,406.06 320,387.67 500,365.17 680,310.10 860,158.56" fill="none" stroke="#54aeff" stroke-width="3"/>
+  <polyline points="140,386.94 320,368.94 500,346.91 680,292.23 860,143.69" fill="none" stroke="#cf222e" stroke-width="3"/>
+  <polyline points="140,406.49 320,388.23 500,365.94 680,311.21 860,161.00" fill="none" stroke="#ff8182" stroke-width="3"/>
+</svg>
