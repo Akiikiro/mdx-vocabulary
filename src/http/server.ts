@@ -720,5 +720,9 @@ function startWorkerProcess(jobId: string): void {
 }
 
 function configuredLLMProviders(): LLMProvider[] {
-  return config.ollamaBaseUrl ? [new OllamaLLMProvider(config.ollamaBaseUrl)] : [];
+  return config.ollamaBaseUrl ? [new OllamaLLMProvider(config.ollamaBaseUrl, fetch, {
+    requestTimeoutMs: config.ollamaRequestTimeoutMs,
+    coldStartTimeoutMs: config.ollamaColdStartTimeoutMs,
+    generationTimeoutMs: config.ollamaGenerationTimeoutMs,
+  })] : [];
 }

@@ -157,7 +157,10 @@ cp .env.example .env
 DATABASE_URL="postgresql://aki@localhost:5432/mdx_vocabulary?schema=public"
 APP_DATA_DIR="./data"
 IMPORT_BATCH_SIZE="100"
-OLLAMA_BASE_URL="http://127.0.0.1:11434"
+OLLAMA_BASE_URL="http://127.0.0.1:11435"
+OLLAMA_REQUEST_TIMEOUT_MS="15000"
+OLLAMA_COLD_START_TIMEOUT_MS="180000"
+OLLAMA_GENERATION_TIMEOUT_MS="60000"
 ```
 
 环境变量：
@@ -168,6 +171,9 @@ OLLAMA_BASE_URL="http://127.0.0.1:11434"
 | `APP_DATA_DIR` | 否 | 保存导入 MDX 的目录，默认 `./data`。 |
 | `IMPORT_BATCH_SIZE` | 否 | 每次批量写入的 entry 数量，默认 `100`。 |
 | `OLLAMA_BASE_URL` | 否 | Ollama 服务的 HTTP(S) base URL；配置后启用 Ollama model discovery。 |
+| `OLLAMA_REQUEST_TIMEOUT_MS` | 否 | Ollama model discovery 和 runner 状态请求超时；默认 `15000`。 |
+| `OLLAMA_COLD_START_TIMEOUT_MS` | 否 | 模型切换或预加载的独立超时；默认 `180000`，不占用正式生成时间。 |
+| `OLLAMA_GENERATION_TIMEOUT_MS` | 否 | 每次正式 Ollama 生成请求的超时；默认 `60000`。 |
 | `HOST` | 否 | Fastify bind host，默认 `127.0.0.1`。 |
 | `PORT` | 否 | Fastify port，默认 `3000`。 |
 
