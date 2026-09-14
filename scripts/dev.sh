@@ -15,10 +15,10 @@ mkdir -p "$RUN_DIR"
 pid_file() { printf '%s/%s.pid' "$RUN_DIR" "$1"; }
 log_file() { printf '%s/%s.log' "$RUN_DIR" "$1"; }
 
-expected_command() {
+service_port() {
   case "$1" in
-    backend) printf '%s' 'npm run api' ;;
-    frontend) printf '%s' 'npm run dev' ;;
+    backend) printf '%s' '3000' ;;
+    frontend) printf '%s' '5173' ;;
   esac
 }
 
@@ -36,12 +36,18 @@ process_exists() {
   kill -0 "$1" 2>/dev/null
 }
 
-is_managed_process() {
-  local service=$1 pid=$2 command expected
+listener_pid() {
+  /usr/sbin/lsof -nP -a -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null | /usr/bin/sort -u | /usr/bin/head -n 1
+}
+
+is_project_listener() {
+  local service=$1 pid=$2 command
   process_exists "$pid" || return 1
   command=$(/bin/ps -p "$pid" -o command= 2>/dev/null) || return 1
-  expected=$(expected_command "$service")
-  [[ "$command" == *"$expected"* ]]
+  case "$service" in
+    backend) [[ "$command" == *"$REPO_ROOT/node_modules/tsx/"* && "$command" == *'src/api.ts'* ]] ;;
+    frontend) [[ "$command" == *"$REPO_ROOT/web/node_modules/.bin/vite"* ]] ;;
+  esac
 }
 
 process_group_exists() {
@@ -49,38 +55,44 @@ process_group_exists() {
 }
 
 is_managed_group() {
-  local service=$1 pgid=$2 marker
+  local service=$1 pgid=$2 marker wrapper
   process_group_exists "$pgid" || return 1
   case "$service" in
-    backend) marker="$REPO_ROOT/node_modules/.bin/tsx src/api.ts" ;;
-    frontend) marker="$REPO_ROOT/web/node_modules/.bin/vite" ;;
+    backend) marker="$REPO_ROOT/node_modules/tsx/"; wrapper='npm run api' ;;
+    frontend) marker="$REPO_ROOT/web/node_modules/.bin/vite"; wrapper='npm run dev' ;;
   esac
-  /bin/ps -ax -o pgid=,command= | /usr/bin/awk -v group="$pgid" -v marker="$marker" '
-    $1 == group && index($0, marker) { found = 1 }
-    END { exit(found ? 0 : 1) }
+  /bin/ps -ax -o pgid=,command= | /usr/bin/awk -v group="$pgid" -v marker="$marker" -v wrapper="$wrapper" '
+    $1 == group && index($0, marker) { listener = 1 }
+    $1 == group && index($0, wrapper) { parent = 1 }
+    END { exit(listener && parent ? 0 : 1) }
   '
 }
 
-is_managed_service() {
-  is_managed_process "$1" "$2" || is_managed_group "$1" "$2"
+write_listener_pid() {
+  printf '%s\n' "$2" > "$(pid_file "$1")"
 }
 
 service_status() {
-  local service=$1 label=$2 file pid=''
+  local service=$1 label=$2 file port listener recorded=''
   file=$(pid_file "$service")
-  if [[ ! -f "$file" ]]; then
-    printf '%-9s stopped\n' "$label:"
-    return 1
-  fi
-
-  pid=$(read_pid "$service" 2>/dev/null || true)
-  if [[ -n "$pid" ]] && is_managed_service "$service" "$pid"; then
-    printf '%-9s running (PID %s)\n' "$label:" "$pid"
+  port=$(service_port "$service")
+  listener=$(listener_pid "$port" || true)
+  recorded=$(read_pid "$service" 2>/dev/null || true)
+  if [[ -n "$listener" ]] && is_project_listener "$service" "$listener"; then
+    if [[ "$recorded" != "$listener" ]]; then
+      write_listener_pid "$service" "$listener"
+    fi
+    printf '%-9s running (listener PID %s, port %s)\n' "$label:" "$listener" "$port"
     return 0
   fi
-
-  rm -f -- "$file"
-  printf '%-9s stopped (removed stale PID file)\n' "$label:"
+  [[ -f "$file" ]] && rm -f -- "$file"
+  if [[ -n "$listener" ]]; then
+    printf '%-9s occupied by unrelated listener PID %s on port %s\n' "$label:" "$listener" "$port"
+  elif [[ -n "$recorded" ]]; then
+    printf '%-9s stopped (removed stale PID file)\n' "$label:"
+  else
+    printf '%-9s stopped\n' "$label:"
+  fi
   return 1
 }
 
@@ -92,33 +104,32 @@ print_status() {
   printf '%-9s %s\n' 'Web:' "$FRONTEND_URL"
 }
 
-wait_until_ready() {
-  local pid=$1 url=$2
-  local attempt
-  for attempt in {1..40}; do
-    process_exists "$pid" || return 1
-    if /usr/bin/curl --silent --fail --max-time 1 --output /dev/null "$url"; then
-      process_exists "$pid" && return 0
-    fi
-    sleep 0.25
-  done
-  return 1
-}
-
 start_service() {
   local service=$1 workdir=$2 script=$3 health_url=$4
-  local file log pid pgid
+  local file log pid pgid port listener recorded=''
   file=$(pid_file "$service")
   log=$(log_file "$service")
+  port=$(service_port "$service")
+  listener=$(listener_pid "$port" || true)
+  recorded=$(read_pid "$service" 2>/dev/null || true)
 
-  if [[ -f "$file" ]]; then
-    pid=$(read_pid "$service" 2>/dev/null || true)
-    if [[ -n "$pid" ]] && is_managed_service "$service" "$pid"; then
-      printf '%s already running (PID %s)\n' "$service" "$pid"
+  if [[ -n "$listener" ]]; then
+    if is_project_listener "$service" "$listener"; then
+      write_listener_pid "$service" "$listener"
+      printf '%s already running (listener PID %s, port %s)\n' "$service" "$listener" "$port"
       return 0
     fi
+    [[ -f "$file" ]] && rm -f -- "$file"
+    printf 'Cannot start %s: port %s is occupied by unrelated listener PID %s.\n' "$service" "$port" "$listener" >&2
+    return 1
+  fi
+  if [[ -f "$file" ]]; then
     rm -f -- "$file"
-    printf 'Removed stale %s PID file.\n' "$service"
+    if [[ -n "$recorded" ]]; then
+      printf 'Removed stale %s PID file (recorded PID %s; no listener on port %s).\n' "$service" "$recorded" "$port"
+    else
+      printf 'Removed invalid %s PID file; no listener on port %s.\n' "$service" "$port"
+    fi
   fi
 
   printf '\n[%s] Starting %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$service" >> "$log"
@@ -164,13 +175,23 @@ start_service() {
     return 1
   fi
 
-  printf '%s\n' "$pid" > "$file"
-  if wait_until_ready "$pid" "$health_url"; then
-    printf 'Started %s (PID %s).\n' "$service" "$pid"
-    return 0
-  fi
+  for _attempt in {1..40}; do
+    listener=$(listener_pid "$port" || true)
+    if [[ -n "$listener" ]] && is_project_listener "$service" "$listener" \
+      && /usr/bin/curl --silent --fail --max-time 1 --output /dev/null "$health_url"; then
+      write_listener_pid "$service" "$listener"
+      printf 'Started %s (listener PID %s, port %s).\n' "$service" "$listener" "$port"
+      return 0
+    fi
+    process_group_exists "$pid" || break
+    sleep 0.25
+  done
 
-  kill -TERM -- "-$pid" 2>/dev/null || true
+  if is_managed_group "$service" "$pid"; then
+    kill -TERM -- "-$pid" 2>/dev/null || true
+  else
+    kill -TERM "$pid" 2>/dev/null || true
+  fi
   rm -f -- "$file"
   printf 'Failed to start %s. See %s\n' "$service" "$log" >&2
   return 1
@@ -186,42 +207,50 @@ start_all() {
 }
 
 stop_service() {
-  local service=$1 file pid=''
+  local service=$1 file port listener pgid=''
   file=$(pid_file "$service")
-  if [[ ! -f "$file" ]]; then
-    printf '%s already stopped.\n' "$service"
+  port=$(service_port "$service")
+  listener=$(listener_pid "$port" || true)
+  if [[ -z "$listener" ]]; then
+    [[ -f "$file" ]] && rm -f -- "$file"
+    printf '%s already stopped; no listener on port %s.\n' "$service" "$port"
     return 0
   fi
-
-  pid=$(read_pid "$service" 2>/dev/null || true)
-  if [[ -z "$pid" ]] || ! is_managed_service "$service" "$pid"; then
-    rm -f -- "$file"
-    printf '%s already stopped; removed stale PID file.\n' "$service"
-    return 0
+  if ! is_project_listener "$service" "$listener"; then
+    [[ -f "$file" ]] && rm -f -- "$file"
+    printf 'Refusing to stop %s: port %s belongs to unrelated listener PID %s.\n' "$service" "$port" "$listener" >&2
+    return 1
   fi
 
-  kill -TERM -- "-$pid" 2>/dev/null || true
+  pgid=$(/bin/ps -p "$listener" -o pgid= 2>/dev/null | /usr/bin/tr -d ' ')
+  if [[ -n "$pgid" ]] && is_managed_group "$service" "$pgid"; then
+    kill -TERM -- "-$pgid" 2>/dev/null || true
+  else
+    kill -TERM "$listener" 2>/dev/null || true
+  fi
   local attempt
   for attempt in {1..20}; do
-    process_group_exists "$pid" || break
+    [[ -z "$(listener_pid "$port" || true)" ]] && break
     sleep 0.25
   done
 
-  if process_group_exists "$pid"; then
+  listener=$(listener_pid "$port" || true)
+  if [[ -n "$listener" ]] && is_project_listener "$service" "$listener"; then
     printf '%s did not stop after SIGTERM; sending SIGKILL.\n' "$service" >&2
-    kill -KILL -- "-$pid" 2>/dev/null || true
+    kill -KILL "$listener" 2>/dev/null || true
     for attempt in {1..8}; do
-      process_group_exists "$pid" || break
+      [[ -z "$(listener_pid "$port" || true)" ]] && break
       sleep 0.25
     done
   fi
 
   rm -f -- "$file"
-  if process_group_exists "$pid"; then
-    printf 'Failed to stop %s process group %s.\n' "$service" "$pid" >&2
+  listener=$(listener_pid "$port" || true)
+  if [[ -n "$listener" ]]; then
+    printf 'Failed to stop %s listener PID %s on port %s.\n' "$service" "$listener" "$port" >&2
     return 1
   fi
-  printf 'Stopped %s.\n' "$service"
+  printf 'Stopped %s; port %s is free.\n' "$service" "$port"
 }
 
 stop_all() {
