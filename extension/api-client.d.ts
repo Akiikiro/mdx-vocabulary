@@ -14,11 +14,13 @@ export interface DictionaryEntry {
 export interface LookupResult {
   dictionary: { id: string; name: string };
   entry: DictionaryEntry;
+  stylesheet: string | null;
 }
 
 export function normalizeBackendUrl(value: unknown): string;
 export function backendPermissionOrigin(backendUrl: string): string;
 export function createDictionaryApi(backendUrl: string, fetchImplementation?: typeof fetch): {
   lookup(word: string): Promise<LookupResult | null>;
+  suggest(prefix: string, limit?: number): Promise<Array<{ headword: string; dictionaryName: string }>>;
   addVocabulary(entryId: string): Promise<unknown>;
 };

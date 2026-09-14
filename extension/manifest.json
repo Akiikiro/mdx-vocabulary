@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "MDX Vocabulary Lookup",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Look up selected English words with a local mdx-vocabulary backend.",
   "permissions": ["storage"],
   "host_permissions": [
@@ -17,7 +17,6 @@
     {
       "matches": ["http://*/*", "https://*/*"],
       "js": ["content.js"],
-      "css": ["content.css"],
       "run_at": "document_idle"
     }
   ],

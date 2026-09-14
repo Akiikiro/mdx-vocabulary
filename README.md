@@ -387,8 +387,10 @@ npm run build
 1. 运行 `./scripts/dev.sh start`，并确保至少有一个 ready dictionary。
 2. 打开 Chrome/Chromium 的 `chrome://extensions`，启用 Developer mode。
 3. 点击 **Load unpacked**，选择仓库的 `extension/` 目录。
-4. 打开任意普通 HTTP(S) 页面，选中一个英文单词；卡片会显示第一个包含 exact match 的 ready dictionary、headword 和纯文本释义。
-5. 点击 **加入生词本**，可在现有 Web App 的 Vocabulary Book 中确认结果；点击 `×` 或按 Escape 关闭卡片。
+4. 打开任意普通 HTTP(S) 页面，选中一个英文单词；卡片会自动查询第一个包含 exact match 的 ready dictionary。
+5. 可在顶部搜索框编辑单词并按 Enter 重新查询，输入时会通过 prefix search 显示 autocomplete 候选。
+6. 词典 section 默认展开 sanitized HTML 完整词条；可折叠并在限定高度内滚动。词典 stylesheet 可从后端读取时会在隔离的 Shadow DOM 内加载。
+7. **英 GB**、**美 US** 使用浏览器 Web Speech API 发音；点击 **加入生词本** 后可在 Web App 的 Vocabulary Book 中确认。点击 `×` 或按 Escape 关闭卡片。
 
 默认后端为 `http://127.0.0.1:3000`，manifest 已包含该地址及 `http://localhost:3000` 的 host permissions。点击扩展工具栏图标可打开设置页；保存其他 HTTP(S) 后端地址时，Chrome 会请求对应 origin 的可选访问权限。
 

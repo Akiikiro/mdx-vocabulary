@@ -34,8 +34,44 @@ describe('browser extension API client', () => {
     await expect(api.lookup('apple')).resolves.toEqual({
       dictionary: { id: 'two', name: 'Two' },
       entry: { id: 'entry-two', headword: 'Apple', plainText: 'A fruit.' },
+      stylesheet: null,
     });
     expect(String(fetchMock.mock.calls[1][0])).toContain('q=apple&mode=exact&limit=1&offset=0');
+  });
+
+  it('uses prefix search for deduplicated autocomplete suggestions', async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      const parsed = new URL(String(url));
+      if (parsed.pathname === '/api/dictionaries') {
+        return jsonResponse({ items: [{ id: 'one', name: 'One' }, { id: 'two', name: 'Two' }] });
+      }
+      if (parsed.pathname === '/api/dictionaries/one/search') {
+        return jsonResponse({ items: [{ headword: 'Apple' }, { headword: 'applet' }] });
+      }
+      return jsonResponse({ items: [{ headword: 'apple' }, { headword: 'application' }] });
+    });
+    const suggestions = await createDictionaryApi('http://localhost:3000', fetchMock as typeof fetch).suggest('app', 3);
+
+    expect(suggestions).toEqual([
+      { headword: 'Apple', dictionaryName: 'One' },
+      { headword: 'applet', dictionaryName: 'One' },
+      { headword: 'application', dictionaryName: 'Two' },
+    ]);
+    expect(fetchMock.mock.calls.slice(1).every(([url]) => String(url).includes('mode=prefix'))).toBe(true);
+  });
+
+  it('loads a same-origin dictionary stylesheet with entry detail', async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      const path = new URL(String(url)).pathname;
+      if (path === '/api/dictionaries') return jsonResponse({ items: [{ id: 'one', name: 'One', stylesheetUrl: '/api/dictionaries/one/assets/dictionary.css' }] });
+      if (path === '/api/dictionaries/one/search') return jsonResponse({ items: [{ id: 'entry-one' }] });
+      if (path === '/api/entries/entry-one') return jsonResponse({ id: 'entry-one', headword: 'Apple', sanitizedHtml: '<b>fruit</b>' });
+      if (path.endsWith('/dictionary.css')) return new Response('.entry { color: green; }');
+      return jsonResponse({}, 404);
+    });
+
+    const result = await createDictionaryApi('http://localhost:3000', fetchMock as typeof fetch).lookup('apple');
+    expect(result?.stylesheet).toBe('.entry { color: green; }');
   });
 
   it('returns null when no dictionary matches and sends vocabulary entry IDs', async () => {

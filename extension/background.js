@@ -13,13 +13,14 @@ async function requireHostPermission(backendUrl) {
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message?.type !== 'lookup' && message?.type !== 'addVocabulary') return false;
+  if (!['lookup', 'suggest', 'addVocabulary'].includes(message?.type)) return false;
 
   void (async () => {
     const backendUrl = await configuredBackendUrl();
     await requireHostPermission(backendUrl);
     const api = createDictionaryApi(backendUrl);
     if (message.type === 'lookup') return api.lookup(message.word);
+    if (message.type === 'suggest') return api.suggest(message.prefix);
     return api.addVocabulary(message.entryId);
   })().then(
     (result) => sendResponse({ ok: true, result }),
