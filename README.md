@@ -2,6 +2,8 @@
 
 `mdx-vocabulary` 是一个把 MDX 词典导入 PostgreSQL，并在浏览器中搜索、阅读和收藏词条的本地优先全栈应用。
 
+仓库还包含一个独立的 Chrome/Chromium Manifest V3 客户端（`extension/`）：在网页中选中英文单词即可通过现有后端查词并加入生词本，不会替代或打包现有 React Web App。
+
 项目目前面向本地开发和功能验证：后端使用 TypeScript、Prisma、PostgreSQL 和 Fastify，前端是独立的 Vite + React 应用。MDX 原始内容会在导入阶段生成可搜索的纯文本和经过清洗的 HTML；公开 API 不返回原始 `entryRaw`。
 
 ## 已实现功能
@@ -376,6 +378,20 @@ npm run build
 
 输出目录为 `web/dist/`。Fastify 当前不会托管此目录。
 
+## Chrome / Chromium extension
+
+`extension/` 是独立的 Manifest V3 客户端，不参与 Vite build。content script 读取页面选区并绘制查词卡片；background service worker 使用现有 dictionary search、entry detail 和 vocabulary API 访问后端。跨 origin 请求不会从网页的 origin 直接发出，因此后端无需为任意网页开放 CORS。
+
+本地加载和验证：
+
+1. 运行 `./scripts/dev.sh start`，并确保至少有一个 ready dictionary。
+2. 打开 Chrome/Chromium 的 `chrome://extensions`，启用 Developer mode。
+3. 点击 **Load unpacked**，选择仓库的 `extension/` 目录。
+4. 打开任意普通 HTTP(S) 页面，选中一个英文单词；卡片会显示第一个包含 exact match 的 ready dictionary、headword 和纯文本释义。
+5. 点击 **加入生词本**，可在现有 Web App 的 Vocabulary Book 中确认结果；点击 `×` 或按 Escape 关闭卡片。
+
+默认后端为 `http://127.0.0.1:3000`，manifest 已包含该地址及 `http://localhost:3000` 的 host permissions。点击扩展工具栏图标可打开设置页；保存其他 HTTP(S) 后端地址时，Chrome 会请求对应 origin 的可选访问权限。
+
 ## Local Development / Service Control
 
 需要同时运行 Fastify 和 Vite 时，可以从任意当前目录调用根目录开发脚本：
@@ -449,12 +465,19 @@ mdx-vocabulary/
 │   ├── db.ts
 │   └── worker.ts
 ├── tests/
+│   ├── browser-extension-api-client.test.ts
 │   ├── dictionary-query-service.integration.test.ts
 │   ├── entries.test.ts
 │   ├── http-api.integration.test.ts
 │   └── importer.integration.test.ts
 ├── scripts/
 │   └── dev.sh
+├── extension/
+│   ├── api-client.js
+│   ├── background.js
+│   ├── content.js
+│   ├── manifest.json
+│   └── options.html
 ├── web/
 │   ├── src/
 │   │   ├── api.ts

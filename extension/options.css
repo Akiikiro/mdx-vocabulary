@@ -1,0 +1,7 @@
+:root { color-scheme: light dark; font: 15px/1.5 system-ui, sans-serif; }
+body { margin: 0; }
+main { max-width: 640px; margin: 48px auto; padding: 0 24px; }
+form { display: grid; gap: 10px; }
+input { padding: 9px 10px; font: inherit; }
+button { width: fit-content; padding: 8px 14px; font: inherit; cursor: pointer; }
+#status { min-height: 1.5em; }
