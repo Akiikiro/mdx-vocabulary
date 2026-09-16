@@ -39,6 +39,31 @@ describe('OllamaLLMProvider', () => {
     }));
   });
 
+  it('maps a provider-neutral JSON schema response format to Ollama format', async () => {
+    const schema = {
+      type: 'object',
+      properties: { paragraph: { type: 'string' } },
+      required: ['paragraph'],
+      additionalProperties: false,
+    };
+    const fetchImplementation = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
+      const url = new URL(input.toString());
+      return url.pathname.endsWith('/api/ps')
+        ? jsonResponse({ models: [{ name: 'gemma3:4b' }] })
+        : jsonResponse({ model: 'gemma3:4b', response: '{"paragraph":"text"}' });
+    });
+    const provider = new OllamaLLMProvider('http://ollama.test:11434', fetchImplementation);
+
+    await provider.generateText({
+      model: 'gemma3:4b',
+      prompt: 'structured prompt',
+      responseFormat: { type: 'json_schema', schema },
+    });
+
+    const generationBody = JSON.parse(String(fetchImplementation.mock.calls[1]?.[1]?.body));
+    expect(generationBody.format).toEqual(schema);
+  });
+
   it('treats an omitted latest tag as exactly equivalent when checking loaded models', async () => {
     const fetchImplementation = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
       const url = new URL(input.toString());

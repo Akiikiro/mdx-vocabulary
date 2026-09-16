@@ -3,6 +3,16 @@ import { LLMProviderError } from './llm-provider.js';
 
 const MAX_VOCABULARY_ITEMS = 30;
 const MAX_VOCABULARY_ITEM_LENGTH = 100;
+const VOCABULARY_GENERATION_SCHEMA = {
+  type: 'object',
+  properties: {
+    paragraph: { type: 'string', minLength: 1 },
+    translation: { type: 'string', minLength: 1 },
+    usedWords: { type: 'array', items: { type: 'string' } },
+  },
+  required: ['paragraph', 'translation', 'usedWords'],
+  additionalProperties: false,
+};
 
 interface ParagraphLengthPolicy {
   min: number;
@@ -57,24 +67,23 @@ export class VocabularyGenerateService {
       const first = await provider.generateText({
         model: modelId,
         prompt: initialPrompt(words),
-        responseFormat: 'json',
+        responseFormat: { type: 'json_schema', schema: VOCABULARY_GENERATION_SCHEMA },
         temperature: 0.7,
         maxOutputTokens: 900,
       });
       const firstValidation = validateGeneratedResult(first.text, words);
-      logGenerationValidation('first', firstValidation.errors);
+      logGenerationValidation('first', words, firstValidation);
       if (firstValidation.result) return firstValidation.result;
 
-      logGenerationValidation('retry_started', firstValidation.errors);
       const corrected = await provider.generateText({
         model: modelId,
         prompt: correctionPrompt(words, first.text, firstValidation.errors),
-        responseFormat: 'json',
+        responseFormat: { type: 'json_schema', schema: VOCABULARY_GENERATION_SCHEMA },
         temperature: 0,
         maxOutputTokens: 900,
       });
       const correctedValidation = validateGeneratedResult(corrected.text, words);
-      logGenerationValidation('retry', correctedValidation.errors);
+      logGenerationValidation('retry', words, correctedValidation);
       if (correctedValidation.result) return correctedValidation.result;
       throw new VocabularyGenerateError(
         'AI_GENERATION_INVALID_RESPONSE',
@@ -106,10 +115,11 @@ Requirements:
 - Use "so", "because", "therefore", and similar connectors only when there is a genuine cause-and-effect relationship. For example, finding a bit of time does not cause someone to approve a plan, and a friend approving of a recipe does not by itself cause someone to eat more.
 - Once an item has been used naturally, avoid repeating it unless repetition is genuinely needed for a clear, natural connection.
 - Before returning, review every vocabulary use for natural collocation and review every cause/effect or logical connection between sentences. Revise anything a fluent English speaker would find implausible or awkward.
-- Provide a natural Chinese translation of the complete paragraph.
-- Return JSON only, with exactly this shape: {"paragraph":"...","translation":"...","usedWords":["..."]}.
-- Set usedWords to exactly ${JSON.stringify(words)}: preserve every supplied string unchanged and keep one supplied item per JSON array element.
-- Do not include grammar analysis, Markdown headings, code fences, or extra commentary.
+- paragraph must contain the complete real English paragraph.
+- translation must contain a natural Chinese translation of the complete paragraph.
+- usedWords must equal ${JSON.stringify(words)}, preserving every supplied string unchanged and keeping one supplied item per array element.
+- Return JSON only. Do not include grammar analysis, Markdown headings, code fences, or extra commentary.
+- Never return ellipsis, placeholder text, or sample values in any field.
 
 Requested vocabulary items:
 ${JSON.stringify(words)}`;
@@ -120,8 +130,15 @@ function correctionPrompt(words: string[], previousOutput: string, errors: strin
   const actions = correctionActions(words, errors, length);
   return `Correct the previous vocabulary-learning result with minimal edits. Do not freely rewrite content that already passes validation.
 
-Correction actions—perform exactly these actions and no others:
+Correction actions—repair these detected problems while ensuring the final result satisfies the complete contract below:
 ${actions.map((action) => `- ${action}`).join('\n')}
+
+Complete final contract—recheck every requirement before responding, including requirements that were not reported as validation problems:
+- paragraph must contain ${length.min}–${length.max} English words; target ${length.targetMin}–${length.targetMax} words. ${length.sentenceGuidance}
+- paragraph must use every requested vocabulary item itself or a simple grammatical inflection accepted by the validator. Do not use a derivational replacement.
+- translation must be a non-empty, natural Chinese translation of the complete final paragraph.
+- usedWords must exactly match ${JSON.stringify(words)}, preserving one supplied string per array element.
+- Return JSON only. Never return ellipsis, placeholder text, sample values, Markdown, code fences, analysis, commentary, or any surrounding text.
 
 Preservation rules:
 - Preserve every already-valid requested vocabulary occurrence in the paragraph. Simple grammatical inflections remain allowed, but derivational replacements do not; for example, "approval" does not satisfy "approve".
@@ -129,7 +146,7 @@ Preservation rules:
 - Leave paragraph wording unchanged except where a correction action explicitly requires a paragraph edit.
 - Leave usedWords unchanged unless a correction action explicitly requires replacing it.
 - Leave the Chinese translation unchanged if the paragraph is unchanged. If the paragraph changes, update only the corresponding translation text.
-- Return strict JSON only with exactly: {"paragraph":"...","translation":"...","usedWords":["..."]}. No Markdown, code fences, analysis, or commentary.
+- Return JSON only with no Markdown, code fences, analysis, commentary, ellipsis, placeholder text, or sample values.
 
 Requested vocabulary items:
 ${JSON.stringify(words)}
@@ -164,16 +181,24 @@ function correctionActions(
 function validateGeneratedResult(text: string, requestedWords: string[]): {
   result: VocabularyGenerateResult | null;
   errors: string[];
+  paragraphWordCount: number | null;
 } {
   const errors: string[] = [];
   let value: unknown;
   try {
     value = JSON.parse(text);
   } catch {
-    return { result: null, errors: ['Output is not valid JSON'] };
+    return { result: null, errors: ['Output is not valid JSON'], paragraphWordCount: null };
   }
-  if (!isRecord(value) || Object.keys(value).some((key) => !['paragraph', 'translation', 'usedWords'].includes(key))) {
-    return { result: null, errors: ['Output must be an object with only paragraph, translation, and usedWords'] };
+  if (!isRecord(value)) {
+    return {
+      result: null,
+      errors: ['Output must be an object with only paragraph, translation, and usedWords'],
+      paragraphWordCount: null,
+    };
+  }
+  if (Object.keys(value).some((key) => !['paragraph', 'translation', 'usedWords'].includes(key))) {
+    errors.push('Output must be an object with only paragraph, translation, and usedWords');
   }
   const paragraph = typeof value.paragraph === 'string' ? value.paragraph.trim() : '';
   const translation = typeof value.translation === 'string' ? value.translation.trim() : '';
@@ -185,6 +210,7 @@ function validateGeneratedResult(text: string, requestedWords: string[]): {
   if (!reportedWords) errors.push('usedWords must be an array of strings');
 
   const paragraphWords = lexicalTokens(paragraph);
+  const paragraphWordCount = typeof value.paragraph === 'string' ? paragraphWords.length : null;
   const length = paragraphLengthPolicy(requestedWords.length);
   if (paragraphWords.length < length.min || paragraphWords.length > length.max) {
     errors.push(`paragraph must contain ${length.min}–${length.max} English words`);
@@ -201,8 +227,12 @@ function validateGeneratedResult(text: string, requestedWords: string[]): {
   }
 
   return errors.length
-    ? { result: null, errors }
-    : { result: { paragraph, translation, usedWords: [...requestedWords] }, errors: [] };
+    ? { result: null, errors, paragraphWordCount }
+    : {
+        result: { paragraph, translation, usedWords: [...requestedWords] },
+        errors: [],
+        paragraphWordCount,
+      };
 }
 
 function paragraphLengthPolicy(wordCount: number): ParagraphLengthPolicy {
@@ -215,9 +245,20 @@ function paragraphLengthPolicy(wordCount: number): ParagraphLengthPolicy {
   return { min: 80, max: 180, targetMin: 120, targetMax: 130, sentenceGuidance: 'Use roughly 10–12 sentences of 10–14 words each.' };
 }
 
-function logGenerationValidation(stage: string, failures: string[]): void {
-  if (process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'test') return;
-  console.info(JSON.stringify({ event: 'vocabulary_generation_validation', stage, failures }));
+function logGenerationValidation(
+  stage: 'first' | 'retry',
+  requestedWords: string[],
+  validation: { errors: string[]; paragraphWordCount: number | null },
+): void {
+  if (validation.errors.length === 0 || process.env.NODE_ENV === 'production' || process.env.NODE_ENV === 'test') return;
+  console.info(JSON.stringify({
+    event: 'vocabulary_generation_validation',
+    stage,
+    requestedWordCount: requestedWords.length,
+    requestedWords,
+    paragraphWordCount: validation.paragraphWordCount,
+    failures: validation.errors,
+  }));
 }
 
 function validateWords(input: string[]): string[] {

@@ -3,12 +3,19 @@ export interface LLMModel {
   displayName: string;
 }
 
+export type JsonSchema = Record<string, unknown>;
+
+export type LLMResponseFormat = 'json' | {
+  type: 'json_schema';
+  schema: JsonSchema;
+};
+
 export interface LLMTextGenerationRequest {
   model: string;
   prompt: string;
   temperature?: number;
   maxOutputTokens?: number;
-  responseFormat?: 'json';
+  responseFormat?: LLMResponseFormat;
 }
 
 export interface LLMTextGenerationResult {

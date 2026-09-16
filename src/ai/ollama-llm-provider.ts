@@ -72,7 +72,11 @@ export class OllamaLLMProvider implements LLMProvider {
         model: request.model,
         prompt: request.prompt,
         stream: false,
-        ...(request.responseFormat === 'json' ? { format: 'json' } : {}),
+        ...(request.responseFormat === 'json'
+          ? { format: 'json' }
+          : request.responseFormat?.type === 'json_schema'
+            ? { format: request.responseFormat.schema }
+            : {}),
         options: {
           ...(request.temperature === undefined ? {} : { temperature: request.temperature }),
           ...(request.maxOutputTokens === undefined ? {} : { num_predict: request.maxOutputTokens }),

@@ -12,10 +12,34 @@ describe('VocabularyGenerateService', () => {
     await expect(service.generate({ provider: 'fixture', model: 'model-b', words: ['study', 'plan'] }))
       .resolves.toEqual({ paragraph, translation: '自然的中文翻译。', usedWords: ['study', 'plan'] });
     expect(provider.generateText).toHaveBeenCalledWith(expect.objectContaining({
-      model: 'model-b', responseFormat: 'json', prompt: expect.stringMatching(
-        /Target 65–75.*required 35–120.*Do not replace.*Set usedWords to exactly \["study","plan"\]/s,
+      model: 'model-b',
+      responseFormat: {
+        type: 'json_schema',
+        schema: {
+          type: 'object',
+          properties: {
+            paragraph: { type: 'string', minLength: 1 },
+            translation: { type: 'string', minLength: 1 },
+            usedWords: { type: 'array', items: { type: 'string' } },
+          },
+          required: ['paragraph', 'translation', 'usedWords'],
+          additionalProperties: false,
+        },
+      },
+      prompt: expect.stringMatching(
+        /Target 65–75.*required 35–120.*Do not replace.*usedWords must equal \["study","plan"\]/s,
       ),
     }));
+    const prompt = vi.mocked(provider.generateText).mock.calls[0]?.[0].prompt ?? '';
+    expect(prompt).not.toContain('"..."');
+    expect(prompt).toContain('paragraph must contain the complete real English paragraph');
+    expect(prompt).toContain('translation must contain a natural Chinese translation');
+    expect(prompt).toContain('usedWords must equal ["study","plan"]');
+    expect(prompt).toContain('Return JSON only');
+    expect(prompt).toContain('Never return ellipsis, placeholder text, or sample values');
+    expect(prompt).not.toContain('exactly these fields');
+    expect(prompt).not.toContain('top-level object');
+    expect(prompt).not.toContain('type: object');
   });
 
   it('prompts for one coherent situation, natural collocations, and plausible logical relationships', async () => {
@@ -87,6 +111,46 @@ describe('VocabularyGenerateService', () => {
     expect(correctionPrompt).not.toContain('Replace usedWords only');
   });
 
+  it('collects an extra-field error and short paragraph error for two words, then retries with the complete contract', async () => {
+    const words = ['cat', 'dog'];
+    const shortParagraph = paragraphWithCount(20, ...words);
+    const correctedParagraph = paragraphWithCount(70, ...words);
+    const provider = fakeProvider([
+      JSON.stringify({
+        paragraph: shortParagraph,
+        translation: '自然的中文翻译。',
+        usedWords: words,
+        explanation: 'extra field',
+      }),
+      generatedOutput(words, correctedParagraph),
+    ]);
+    const service = new VocabularyGenerateService(new AIModelService([provider]));
+
+    await expect(service.generate({ provider: 'fixture', model: 'model-a', words })).resolves.toEqual({
+      paragraph: correctedParagraph,
+      translation: '自然的中文翻译。',
+      usedWords: words,
+    });
+    expect(provider.generateText).toHaveBeenCalledTimes(2);
+    const prompt = vi.mocked(provider.generateText).mock.calls[1]?.[0].prompt ?? '';
+    expect(prompt).toContain('Output must be an object with only paragraph, translation, and usedWords');
+    expect(prompt).toContain('paragraph must contain 35–120 English words');
+    expect(prompt).toContain('paragraph must contain 35–120 English words; target 65–75 words');
+    expect(prompt).toContain('Use roughly 5–7 sentences.');
+    expect(prompt).toContain('must use every requested vocabulary item');
+    expect(prompt).toContain('translation must be a non-empty, natural Chinese translation');
+    expect(prompt).toContain('usedWords must exactly match ["cat","dog"]');
+    expect(prompt).toContain('Return JSON only');
+    expect(prompt).not.toContain('"..."');
+    expect(prompt).toContain('Never return ellipsis, placeholder text, sample values');
+    expect(prompt).not.toContain('top-level object');
+    expect(prompt).not.toContain('exactly these fields');
+    expect(prompt).not.toContain('type: object');
+    expect(vi.mocked(provider.generateText).mock.calls[1]?.[0].responseFormat).toEqual(
+      vi.mocked(provider.generateText).mock.calls[0]?.[0].responseFormat,
+    );
+  });
+
   it('gives a length-only retry instructions to preserve valid vocabulary usage', async () => {
     const words = ['cat', 'dog'];
     const provider = fakeProvider([
@@ -128,6 +192,74 @@ describe('VocabularyGenerateService', () => {
       code: 'AI_GENERATION_INVALID_RESPONSE',
     });
     expect(provider.generateText).toHaveBeenCalledTimes(2);
+  });
+
+  it('early returns only the JSON parse failure, while retry still receives the complete final contract', async () => {
+    const words = ['cat', 'dog', 'bird'];
+    const provider = fakeProvider(['not json', generatedOutput(words, paragraphWithCount(70, ...words))]);
+    const service = new VocabularyGenerateService(new AIModelService([provider]));
+
+    await expect(service.generate({ provider: 'fixture', model: 'model-a', words })).resolves.toEqual({
+      paragraph: paragraphWithCount(70, ...words),
+      translation: '自然的中文翻译。',
+      usedWords: words,
+    });
+    const prompt = vi.mocked(provider.generateText).mock.calls[1]?.[0].prompt ?? '';
+    expect(prompt).toContain('Validation problems:\n["Output is not valid JSON"]');
+    expect(prompt).not.toContain('paragraph is missing requested items:');
+    expect(prompt).toContain('paragraph must contain 35–120 English words; target 65–75 words');
+    expect(prompt).toContain('usedWords must exactly match ["cat","dog","bird"]');
+  });
+
+  it('logs development-only diagnostics for failed initial and retry validation', async () => {
+    const words = ['watch', 'best'];
+    const retryOutput = generatedOutput(words, paragraphWithCount(20, ...words));
+    const provider = fakeProvider(['not json', retryOutput]);
+    const service = new VocabularyGenerateService(new AIModelService([provider]));
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    vi.stubEnv('NODE_ENV', 'development');
+
+    try {
+      await expect(service.generate({ provider: 'fixture', model: 'model-a', words })).rejects.toMatchObject({
+        code: 'AI_GENERATION_INVALID_RESPONSE',
+      });
+      expect(info).toHaveBeenCalledTimes(2);
+      expect(JSON.parse(String(info.mock.calls[0]?.[0]))).toEqual({
+        event: 'vocabulary_generation_validation',
+        stage: 'first',
+        requestedWordCount: 2,
+        requestedWords: words,
+        paragraphWordCount: null,
+        failures: ['Output is not valid JSON'],
+      });
+      expect(JSON.parse(String(info.mock.calls[1]?.[0]))).toEqual({
+        event: 'vocabulary_generation_validation',
+        stage: 'retry',
+        requestedWordCount: 2,
+        requestedWords: words,
+        paragraphWordCount: 20,
+        failures: ['paragraph must contain 35–120 English words'],
+      });
+    } finally {
+      vi.unstubAllEnvs();
+      info.mockRestore();
+    }
+  });
+
+  it('does not log generation diagnostics in production', async () => {
+    const provider = fakeProvider(['initial private response', 'retry private response']);
+    const service = new VocabularyGenerateService(new AIModelService([provider]));
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    vi.stubEnv('NODE_ENV', 'production');
+
+    try {
+      await expect(service.generate({ provider: 'fixture', model: 'model-a', words: ['watch', 'best'] }))
+        .rejects.toMatchObject({ code: 'AI_GENERATION_INVALID_RESPONSE' });
+      expect(info).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+      info.mockRestore();
+    }
   });
 
   it('validates provider, model, words, and provider availability', async () => {
