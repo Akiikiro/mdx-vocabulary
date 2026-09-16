@@ -304,6 +304,7 @@ http://127.0.0.1:3000
 | GET | `/api/dictionaries/:dictionaryId/resources/*` | 按大小写敏感的 Unicode 逻辑路径精确读取该 dictionary 的 MDD resource bytes。 |
 | GET | `/api/dictionaries/:dictionaryId/browser-audio/*` | 将经过校验的 Ogg/Speex 发音资源按需转换为浏览器兼容的 mono MP3，并使用包/内容身份感知的磁盘缓存。 |
 | GET | `/api/experimental/edge-tts?word=<word>&voice=female|male` | 实验性 Edge TTS 发音；女性固定使用 `en-US-AvaNeural`，男性固定使用 `en-US-BrianNeural`，生成并分别缓存 MP3。 |
+| POST | `/api/tts` | 按需为经过验证的文本生成 Edge TTS MP3；接受 `text`、`voice`（`female` / `male`）和 `rate`（0.5–2），最多 2000 个字符。 |
 | GET | `/api/ai/models` | 返回已配置 AI providers 及动态发现的 models；响应使用应用自有稳定 DTO。 |
 | POST | `/api/ai/generate-paragraph` | 接受运行时 `{ provider, model, words }`，返回 `{ paragraph, translation, usedWords }`；无效生成最多纠正重试一次。 |
 | POST | `/api/ai/generate-paragraph/stream` | 接受相同请求并返回 NDJSON attempt、正文 delta 和最终 validated result；纠正重试前发送新的 attempt 以重置 draft。 |
@@ -328,6 +329,8 @@ curl -X DELETE 'http://127.0.0.1:3000/api/vocabulary/<vocabularyItemId>'
 Oxford 等词典的 `.spx` 发音资源需要运行环境提供支持 Speex 解码和 `libmp3lame` 编码的 `ffmpeg`。默认从 `PATH` 查找，也可通过 `FFMPEG_PATH` 指定可执行文件。原始 `/resources/*` 端点始终返回未经转换的 MDD bytes；前端发音控件使用独立的 `/browser-audio/*` 派生端点。首次请求完成转换后，MP3 缓存在 `APP_DATA_DIR/.cache/pronunciation-audio`。
 
 词条中的 `Female` / `Male` 按钮用于将 Edge TTS 和词典原始发音做实验性 A/B 比较，分别固定使用 `en-US-AvaNeural` 和 `en-US-BrianNeural`。浏览器只请求本地 `/api/experimental/edge-tts`；第三方 Edge Read Aloud 调用完全位于后端。不同 voice 的生成结果分别缓存在 `APP_DATA_DIR/.cache/edge-tts`。该非官方在线服务可能变化或不可用，不应视为离线词典发音的替代品。
+
+生词本的 AI paragraph 在生成并通过后端验证后显示全文播放控件。音频仅在用户点击播放时通过 `/api/tts` 按需生成；streaming draft 不会触发 TTS。音频缓存同时区分规范化文本、实际 voice、rate、输出格式和缓存版本，并继续保存在 `APP_DATA_DIR/.cache/edge-tts`。暂停和停止只影响音频播放，TTS 加载失败不会清除已经生成的 paragraph。
 
 搜索只允许 ready dictionary；不存在的 dictionary 返回 404，非 ready dictionary 返回 409。API 参数错误使用 400，未预期错误使用不包含内部 stack trace 的 500 响应。
 

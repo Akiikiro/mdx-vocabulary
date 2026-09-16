@@ -19,6 +19,10 @@ describe('dictionary resource HTTP API', () => {
   let aiUnavailable = false;
   let aiGenerationText = validGeneratedParagraph('fixture');
   let aiStreamingTexts: string[] | null = null;
+  const getTextAudio = vi.fn(async (text: string, voice: 'female' | 'male', rate: number) => {
+    if (text === 'unavailable') throw new EdgeTtsError('EDGE_TTS_UNAVAILABLE', 'Edge TTS is unavailable');
+    return { bytes: Buffer.from('ID3paragraph'), contentType: 'audio/mpeg' as const, voice: voice === 'female' ? 'en-US-AvaNeural' : 'en-US-BrianNeural', cacheHit: false, rate };
+  });
   const lookupResource = vi.fn((volume: string, key: string) => {
     if (volume.includes(dictionaryA) && key === '\\audio\\日本語\\東京.ogg') return Buffer.from('OggSunicode');
     if (volume.includes(dictionaryA) && key === '\\Audio\\Test.OGG') return Buffer.from('OggScase');
@@ -72,6 +76,7 @@ describe('dictionary resource HTTP API', () => {
           if (word === 'unavailable') throw new EdgeTtsError('EDGE_TTS_UNAVAILABLE', 'Edge TTS is unavailable');
           return { bytes: Buffer.from('ID3edge'), contentType: 'audio/mpeg', voice: voice === 'female' ? 'en-US-AvaNeural' : 'en-US-BrianNeural', cacheHit: false };
         },
+        getTextAudio,
       },
       llmProviders: [llmProvider],
       startImportJob: () => {},
@@ -167,6 +172,37 @@ describe('dictionary resource HTTP API', () => {
     expect(route.parameters).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'voice', required: true, schema: expect.objectContaining({ enum: ['female', 'male'] }) }),
     ]));
+    expect(route.responses['200'].content['audio/mpeg'].schema).toEqual({ type: 'string', format: 'binary' });
+  });
+
+  it('generates paragraph TTS audio through the text-oriented endpoint', async () => {
+    const text = Array.from({ length: 100 }, () => 'practice').join(' ');
+    const response = await server.inject({
+      method: 'POST', url: '/api/tts', payload: { text, voice: 'female', rate: 0.9 },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toBe('audio/mpeg');
+    expect(response.headers['cache-control']).toBe('private, max-age=86400');
+    expect(response.rawPayload).toEqual(Buffer.from('ID3paragraph'));
+    expect(getTextAudio).toHaveBeenCalledWith(text, 'female', 0.9);
+
+    const invalid = await server.inject({
+      method: 'POST', url: '/api/tts', payload: { text: 'test', voice: 'female', rate: 3 },
+    });
+    expect(invalid.statusCode).toBe(400);
+    const unavailable = await server.inject({
+      method: 'POST', url: '/api/tts', payload: { text: 'unavailable', voice: 'male', rate: 1 },
+    });
+    expect(unavailable.statusCode).toBe(503);
+    expect(unavailable.json()).toEqual({ error: { code: 'EDGE_TTS_UNAVAILABLE', message: 'Edge TTS is unavailable' } });
+  });
+
+  it('documents the paragraph TTS endpoint in OpenAPI', async () => {
+    const response = await server.inject({ method: 'GET', url: '/docs/json' });
+    const route = response.json().paths['/api/tts'].post;
+    expect(route.requestBody.content['application/json'].schema).toEqual(expect.objectContaining({
+      required: ['text', 'voice', 'rate'], additionalProperties: false,
+    }));
     expect(route.responses['200'].content['audio/mpeg'].schema).toEqual({ type: 'string', format: 'binary' });
   });
 

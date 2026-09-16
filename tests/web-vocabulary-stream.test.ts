@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { streamVocabularyParagraph } from '../web/src/api.js';
+import { generateTtsAudio, streamVocabularyParagraph } from '../web/src/api.js';
 
 describe('streamVocabularyParagraph', () => {
   afterEach(() => vi.unstubAllGlobals());
@@ -35,6 +35,23 @@ describe('streamVocabularyParagraph', () => {
     ])));
 
     await expect(streamVocabularyParagraph('ollama', 'model', ['word'])).rejects.toThrow('Invalid result');
+  });
+
+  it('requests paragraph audio on demand and forwards its AbortSignal', async () => {
+    const audio = new Blob(['ID3audio'], { type: 'audio/mpeg' });
+    const fetchMock = vi.fn(async () => new Response(audio, { status: 200, headers: { 'content-type': 'audio/mpeg' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    const controller = new AbortController();
+
+    const result = await generateTtsAudio('Validated paragraph.', 'female', 1, controller.signal);
+
+    expect(result.type).toBe('audio/mpeg');
+    expect(fetchMock).toHaveBeenCalledWith('/api/tts', {
+      method: 'POST',
+      headers: { accept: 'audio/mpeg', 'content-type': 'application/json' },
+      body: JSON.stringify({ text: 'Validated paragraph.', voice: 'female', rate: 1 }),
+      signal: controller.signal,
+    });
   });
 });
 

@@ -3,10 +3,15 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { MsEdgeTTS, OUTPUT_FORMAT } from 'msedge-tts';
 
-const CACHE_VERSION = 'edge-tts-mp3-v2';
+const CACHE_VERSION = 'edge-tts-mp3-v3';
 const MAX_WORD_LENGTH = 100;
+export const MAX_TTS_TEXT_LENGTH = 2_000;
 const MAX_AUDIO_BYTES = 2 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 15_000;
+const DEFAULT_TTS_PITCH = '+0Hz';
+const DEFAULT_TTS_VOLUME = 100;
+export const MIN_TTS_RATE = 0.5;
+export const MAX_TTS_RATE = 2;
 
 export type EdgeTtsVoice = 'female' | 'male';
 
@@ -29,15 +34,17 @@ export interface EdgeTtsAudio {
 }
 
 export interface EdgeTtsProvider {
-  synthesize(word: string, voice: string): Promise<Buffer>;
+  synthesize(text: string, voice: string, rate: number): Promise<Buffer>;
 }
 
 export class MsEdgeTtsProvider implements EdgeTtsProvider {
-  async synthesize(word: string, voice: string): Promise<Buffer> {
+  async synthesize(text: string, voice: string, rate: number): Promise<Buffer> {
     const tts = new MsEdgeTTS();
     try {
       await tts.setMetadata(voice, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
-      const { audioStream } = tts.toStream(escapeXml(word));
+      const { audioStream } = tts.toStream(escapeXml(text), {
+        rate, pitch: DEFAULT_TTS_PITCH, volume: DEFAULT_TTS_VOLUME,
+      });
       return await collectAudio(audioStream, tts, REQUEST_TIMEOUT_MS);
     } catch (error) {
       throw asUnavailable(error);
@@ -56,15 +63,28 @@ export class EdgeTtsService {
   ) {}
 
   async getAudio(inputWord: string, voiceSelection: EdgeTtsVoice): Promise<EdgeTtsAudio> {
-    const word = validateWord(inputWord);
+    const word = inputWord.trim().normalize('NFC');
+    if (!word || Array.from(word).length > MAX_WORD_LENGTH || /[\u0000-\u001f\u007f]/u.test(word)) {
+      throw new EdgeTtsError('INVALID_EDGE_TTS_REQUEST', 'word must contain 1 to 100 safe characters');
+    }
+    return this.getTextAudio(word, voiceSelection, 1);
+  }
+
+  async getTextAudio(inputText: string, voiceSelection: EdgeTtsVoice, rate: number): Promise<EdgeTtsAudio> {
+    const text = validateText(inputText);
     if (voiceSelection !== 'female' && voiceSelection !== 'male') {
       throw new EdgeTtsError('INVALID_EDGE_TTS_REQUEST', 'voice must be female or male');
     }
+    if (!Number.isFinite(rate) || rate < MIN_TTS_RATE || rate > MAX_TTS_RATE) {
+      throw new EdgeTtsError('INVALID_EDGE_TTS_REQUEST', `rate must be between ${MIN_TTS_RATE} and ${MAX_TTS_RATE}`);
+    }
     const voice = EDGE_TTS_VOICES[voiceSelection];
     const cacheKey = crypto.createHash('sha256').update(JSON.stringify({
-      word,
-      voiceSelection,
+      text,
       voice,
+      rate,
+      pitch: DEFAULT_TTS_PITCH,
+      volume: DEFAULT_TTS_VOLUME,
       output: OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3,
       version: CACHE_VERSION,
     })).digest('hex');
@@ -73,7 +93,7 @@ export class EdgeTtsService {
 
     const active = this.pending.get(cacheKey);
     if (active) return active;
-    const synthesis = this.synthesizeAndCache(cacheKey, word, voice).finally(() => this.pending.delete(cacheKey));
+    const synthesis = this.synthesizeAndCache(cacheKey, text, voice, rate).finally(() => this.pending.delete(cacheKey));
     this.pending.set(cacheKey, synthesis);
     return synthesis;
   }
@@ -92,10 +112,10 @@ export class EdgeTtsService {
     }
   }
 
-  private async synthesizeAndCache(cacheKey: string, word: string, voice: string): Promise<EdgeTtsAudio> {
+  private async synthesizeAndCache(cacheKey: string, text: string, voice: string, rate: number): Promise<EdgeTtsAudio> {
     let bytes: Buffer;
     try {
-      bytes = await this.provider.synthesize(word, voice);
+      bytes = await this.provider.synthesize(text, voice, rate);
     } catch (error) {
       throw asUnavailable(error);
     }
@@ -115,12 +135,12 @@ export class EdgeTtsService {
   }
 }
 
-function validateWord(input: string): string {
-  const word = input.trim().normalize('NFC');
-  if (!word || Array.from(word).length > MAX_WORD_LENGTH || /[\u0000-\u001f\u007f]/u.test(word)) {
-    throw new EdgeTtsError('INVALID_EDGE_TTS_REQUEST', 'word must contain 1 to 100 safe characters');
+function validateText(input: string): string {
+  const text = input.trim().normalize('NFC');
+  if (!text || Array.from(text).length > MAX_TTS_TEXT_LENGTH || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(text)) {
+    throw new EdgeTtsError('INVALID_EDGE_TTS_REQUEST', `text must contain 1 to ${MAX_TTS_TEXT_LENGTH} safe characters`);
   }
-  return word;
+  return text;
 }
 
 function escapeXml(value: string): string {

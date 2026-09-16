@@ -30,7 +30,14 @@ import {
   PronunciationAudioError,
   PronunciationAudioService,
 } from '../resources/pronunciation-audio-service.js';
-import { EdgeTtsError, EdgeTtsService, type EdgeTtsVoice } from '../resources/edge-tts-service.js';
+import {
+  EdgeTtsError,
+  EdgeTtsService,
+  MAX_TTS_RATE,
+  MAX_TTS_TEXT_LENGTH,
+  MIN_TTS_RATE,
+  type EdgeTtsVoice,
+} from '../resources/edge-tts-service.js';
 import { InvalidLogicalResourcePathError } from '../resources/logical-resource-path.js';
 import {
   DictionaryPackageStorage,
@@ -61,6 +68,7 @@ interface SearchQuery { q: string; mode?: 'exact' | 'prefix'; limit?: number; of
 interface DictionaryParams { dictionaryId: string }
 interface DictionaryAssetParams extends DictionaryParams { '*': string }
 interface EdgeTtsQuery { word: string; voice: EdgeTtsVoice }
+interface TtsBody { text: string; voice: EdgeTtsVoice; rate: number }
 interface GenerateParagraphBody { provider: string; model: string; words: string[] }
 
 export interface ApiServerOptions {
@@ -68,7 +76,7 @@ export interface ApiServerOptions {
   packageStorage?: DictionaryPackageStorage;
   mddResourceAdapter?: MddResourceAdapter;
   pronunciationAudioService?: Pick<PronunciationAudioService, 'getAudio'>;
-  edgeTtsService?: Pick<EdgeTtsService, 'getAudio'>;
+  edgeTtsService?: Pick<EdgeTtsService, 'getAudio' | 'getTextAudio'>;
   llmProviders?: readonly LLMProvider[];
   detailShadow?: DictionaryDetailShadowHook;
   lazyPrimary?: LazyPrimaryOptions;
@@ -277,6 +285,21 @@ export async function createApiServer(database: PrismaClient, options: ApiServer
               ...((schema.response ?? {}) as Record<string, unknown>),
               200: {
                 description: 'Experimental Edge TTS MP3 pronunciation',
+                content: { 'audio/mpeg': { schema: { type: 'string', format: 'binary' } } },
+              },
+            },
+          } as typeof schema,
+          url,
+        };
+      }
+      if (url === '/api/tts') {
+        return {
+          schema: {
+            ...schema,
+            response: {
+              ...((schema.response ?? {}) as Record<string, unknown>),
+              200: {
+                description: 'On-demand text-to-speech MP3 audio',
                 content: { 'audio/mpeg': { schema: { type: 'string', format: 'binary' } } },
               },
             },
@@ -665,6 +688,37 @@ export async function createApiServer(database: PrismaClient, options: ApiServer
   }, async (request, reply) => {
     try {
       const audio = await edgeTtsService.getAudio(request.query.word, request.query.voice);
+      return reply
+        .header('Cache-Control', 'private, max-age=86400')
+        .type(audio.contentType)
+        .send(audio.bytes);
+    } catch (error) {
+      if (error instanceof EdgeTtsError) {
+        throw new HttpError(error.code === 'INVALID_EDGE_TTS_REQUEST' ? 400 : 503, error.code, error.message);
+      }
+      throw error;
+    }
+  });
+
+  app.post<{ Body: TtsBody }>('/api/tts', {
+    schema: {
+      operationId: 'generateTtsAudio', summary: 'Generate text-to-speech audio', tags: ['resources'],
+      body: {
+        type: 'object', required: ['text', 'voice', 'rate'], additionalProperties: false,
+        properties: {
+          text: { type: 'string', minLength: 1, maxLength: MAX_TTS_TEXT_LENGTH },
+          voice: { type: 'string', enum: ['female', 'male'] },
+          rate: { type: 'number', minimum: MIN_TTS_RATE, maximum: MAX_TTS_RATE },
+        },
+      },
+      response: {
+        200: { type: 'string', format: 'binary', description: 'On-demand text-to-speech MP3 audio' },
+        400: errorSchema, 503: errorSchema, 500: errorSchema,
+      },
+    },
+  }, async (request, reply) => {
+    try {
+      const audio = await edgeTtsService.getTextAudio(request.body.text, request.body.voice, request.body.rate);
       return reply
         .header('Cache-Control', 'private, max-age=86400')
         .type(audio.contentType)

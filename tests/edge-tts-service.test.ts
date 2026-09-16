@@ -8,11 +8,11 @@ describe('EdgeTtsService', () => {
   let root: string;
   const mp3 = Buffer.from('ID3experimental-audio');
   let provider: EdgeTtsProvider;
-  let synthesize: Mock<(word: string, voice: string) => Promise<Buffer>>;
+  let synthesize: Mock<(text: string, voice: string, rate: number) => Promise<Buffer>>;
 
   beforeEach(async () => {
     root = await fsp.mkdtemp(path.join(os.tmpdir(), 'edge-tts-'));
-    synthesize = vi.fn(async (_word: string, _voice: string) => mp3);
+    synthesize = vi.fn(async (_text: string, _voice: string, _rate: number) => mp3);
     provider = { synthesize };
   });
 
@@ -24,8 +24,8 @@ describe('EdgeTtsService', () => {
     const male = await service.getAudio('vocabulary', 'male');
     expect(female.voice).toBe('en-US-AvaNeural');
     expect(male.voice).toBe('en-US-BrianNeural');
-    expect(synthesize).toHaveBeenNthCalledWith(1, 'vocabulary', 'en-US-AvaNeural');
-    expect(synthesize).toHaveBeenNthCalledWith(2, 'vocabulary', 'en-US-BrianNeural');
+    expect(synthesize).toHaveBeenNthCalledWith(1, 'vocabulary', 'en-US-AvaNeural', 1);
+    expect(synthesize).toHaveBeenNthCalledWith(2, 'vocabulary', 'en-US-BrianNeural', 1);
   });
 
   it('deduplicates concurrent synthesis and then uses the disk cache', async () => {
@@ -60,6 +60,38 @@ describe('EdgeTtsService', () => {
     expect(synthesize).toHaveBeenCalledTimes(2);
     await expect(service.getAudio('\u0000unsafe', 'female')).rejects.toMatchObject({ code: 'INVALID_EDGE_TTS_REQUEST' });
     await expect(service.getAudio('word', 'other' as 'female')).rejects.toMatchObject({ code: 'INVALID_EDGE_TTS_REQUEST' });
+  });
+
+  it('synthesizes paragraphs and keys the cache by normalized text, actual voice, and rate', async () => {
+    const service = new EdgeTtsService(root, provider);
+    const paragraph = Array.from({ length: 150 }, (_, index) => `word${index}`).join(' ');
+
+    await service.getTextAudio(`  ${paragraph}  `, 'female', 0.9);
+    await service.getTextAudio(paragraph, 'female', 0.9);
+    await service.getTextAudio(paragraph, 'female', 1);
+    await service.getTextAudio(paragraph, 'male', 0.9);
+
+    expect(synthesize).toHaveBeenCalledTimes(3);
+    expect(synthesize).toHaveBeenNthCalledWith(1, paragraph, 'en-US-AvaNeural', 0.9);
+    expect(synthesize).toHaveBeenNthCalledWith(2, paragraph, 'en-US-AvaNeural', 1);
+    expect(synthesize).toHaveBeenNthCalledWith(3, paragraph, 'en-US-BrianNeural', 0.9);
+  });
+
+  it('deduplicates concurrent paragraph synthesis and enforces text and rate limits', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    synthesize.mockImplementationOnce(async () => { await gate; return mp3; });
+    const service = new EdgeTtsService(root, provider);
+    const paragraph = Array.from({ length: 100 }, () => 'practice').join(' ');
+    const first = service.getTextAudio(paragraph, 'female', 1);
+    const duplicate = service.getTextAudio(paragraph, 'female', 1);
+    release();
+    await Promise.all([first, duplicate]);
+
+    expect(synthesize).toHaveBeenCalledTimes(1);
+    await expect(service.getTextAudio('x'.repeat(2_001), 'female', 1)).rejects.toMatchObject({ code: 'INVALID_EDGE_TTS_REQUEST' });
+    await expect(service.getTextAudio('paragraph', 'female', 0.49)).rejects.toMatchObject({ code: 'INVALID_EDGE_TTS_REQUEST' });
+    await expect(service.getTextAudio('paragraph', 'female', 2.01)).rejects.toMatchObject({ code: 'INVALID_EDGE_TTS_REQUEST' });
   });
 
   it('fails cleanly when synthesis is unavailable', async () => {

@@ -1,6 +1,7 @@
 import { type KeyboardEvent, useEffect, useRef, useState } from 'react';
 import {
   addVocabulary,
+  generateTtsAudio,
   getEntry,
   getDictionaryImportStatus,
   importDictionaryPackage,
@@ -24,6 +25,7 @@ const AUTOCOMPLETE_DELAY_MS = 250;
 const AUTOCOMPLETE_CANDIDATE_LIMIT = 30;
 const AUTOCOMPLETE_DISPLAY_LIMIT = 10;
 type TopLevelView = 'dictionary' | 'vocabulary';
+type ParagraphAudioStatus = 'idle' | 'loading' | 'playing' | 'paused' | 'error';
 
 export function App() {
   const [currentView, setCurrentView] = useState<TopLevelView>('dictionary');
@@ -47,6 +49,8 @@ export function App() {
   const [loadingAIModels, setLoadingAIModels] = useState(true);
   const [generatingParagraph, setGeneratingParagraph] = useState(false);
   const [generationError, setGenerationError] = useState('');
+  const [paragraphAudioStatus, setParagraphAudioStatus] = useState<ParagraphAudioStatus>('idle');
+  const [paragraphAudioError, setParagraphAudioError] = useState('');
   const [savingVocabulary, setSavingVocabulary] = useState(false);
   const [removingVocabularyId, setRemovingVocabularyId] = useState('');
   const [autocompleteCompleted, setAutocompleteCompleted] = useState(false);
@@ -58,6 +62,9 @@ export function App() {
   const autocompleteController = useRef<AbortController | null>(null);
   const detailController = useRef<AbortController | null>(null);
   const generationController = useRef<AbortController | null>(null);
+  const paragraphAudioController = useRef<AbortController | null>(null);
+  const paragraphAudio = useRef<HTMLAudioElement | null>(null);
+  const paragraphAudioUrl = useRef<string | null>(null);
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const skipAutocompleteValue = useRef<string | null>(null);
   const styledDictionaryId = detail?.dictionaryId ?? dictionaryId;
@@ -68,7 +75,10 @@ export function App() {
 
   useDictionaryStylesheet(dictionaryStylesheetUrl, dictionaryStylesheetCompatibilityProfile);
 
-  useEffect(() => () => generationController.current?.abort(), []);
+  useEffect(() => () => {
+    generationController.current?.abort();
+    disposeParagraphAudio();
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -319,6 +329,7 @@ export function App() {
       .map((item) => item.entry.headword);
     if (!selectedWords.length || !aiProviderId || !aiModelId) return;
 
+    disposeParagraphAudio();
     setGeneratingParagraph(true);
     setGenerationError('');
     setGeneratedParagraph(null);
@@ -343,6 +354,73 @@ export function App() {
         generationController.current = null;
         setGeneratingParagraph(false);
       }
+    }
+  }
+
+  function disposeParagraphAudio() {
+    paragraphAudioController.current?.abort();
+    paragraphAudioController.current = null;
+    if (paragraphAudio.current) {
+      paragraphAudio.current.pause();
+      paragraphAudio.current.removeAttribute('src');
+      paragraphAudio.current.load();
+      paragraphAudio.current = null;
+    }
+    if (paragraphAudioUrl.current) {
+      URL.revokeObjectURL(paragraphAudioUrl.current);
+      paragraphAudioUrl.current = null;
+    }
+    setParagraphAudioStatus('idle');
+    setParagraphAudioError('');
+  }
+
+  async function playOrPauseParagraph() {
+    if (!generatedParagraph) return;
+    const currentAudio = paragraphAudio.current;
+    if (currentAudio && paragraphAudioStatus === 'playing') {
+      currentAudio.pause();
+      setParagraphAudioStatus('paused');
+      return;
+    }
+    if (currentAudio && paragraphAudioStatus === 'paused') {
+      try {
+        await currentAudio.play();
+      } catch (reason) {
+        setParagraphAudioStatus('error');
+        setParagraphAudioError(messageFrom(reason));
+      }
+      return;
+    }
+
+    const controller = new AbortController();
+    paragraphAudioController.current?.abort();
+    paragraphAudioController.current = controller;
+    setParagraphAudioStatus('loading');
+    setParagraphAudioError('');
+    try {
+      const blob = await generateTtsAudio(generatedParagraph.paragraph, 'female', 1, controller.signal);
+      if (controller.signal.aborted) return;
+      const objectUrl = URL.createObjectURL(blob);
+      paragraphAudioUrl.current = objectUrl;
+      const audio = new Audio(objectUrl);
+      paragraphAudio.current = audio;
+      audio.onplaying = () => setParagraphAudioStatus('playing');
+      audio.onpause = () => {
+        if (!audio.ended && paragraphAudio.current === audio) setParagraphAudioStatus('paused');
+      };
+      audio.onended = () => setParagraphAudioStatus('paused');
+      audio.onerror = () => {
+        setParagraphAudioStatus('error');
+        setParagraphAudioError('Paragraph audio failed to load');
+      };
+      await audio.play();
+    } catch (reason) {
+      if (!controller.signal.aborted) {
+        setParagraphAudioStatus('error');
+        setParagraphAudioError(messageFrom(reason));
+      }
+    } finally {
+      if (paragraphAudioController.current === controller) paragraphAudioController.current = null;
     }
   }
 
@@ -621,8 +699,27 @@ export function App() {
             )}
             {generatedParagraph && (
               <article className="generated-result" aria-live="polite">
-                <h3>English paragraph</h3>
+                <div className="generated-paragraph-heading">
+                  <h3>English paragraph</h3>
+                  <div className="paragraph-audio-controls" aria-label="Paragraph audio controls">
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      disabled={paragraphAudioStatus === 'loading'}
+                      onClick={() => void playOrPauseParagraph()}
+                    >
+                      {paragraphAudioStatus === 'loading' ? 'Loading…' : paragraphAudioStatus === 'playing' ? 'Pause' : 'Play'}
+                    </button>
+                    <button
+                      className="secondary-button"
+                      type="button"
+                      disabled={paragraphAudioStatus === 'idle'}
+                      onClick={disposeParagraphAudio}
+                    >Stop</button>
+                  </div>
+                </div>
                 <p>{generatedParagraph.paragraph}</p>
+                {paragraphAudioError && <p className="error paragraph-audio-error" role="alert">{paragraphAudioError}</p>}
                 <h3>Chinese translation</h3>
                 <p lang="zh-CN">{generatedParagraph.translation}</p>
               </article>

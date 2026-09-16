@@ -80,6 +80,12 @@ h2 { margin: 0 0 18px; font-size: 1.05rem; }
 .generated-result h3 { margin: 0 0 6px; color: #176448; font-size: .88rem; }
 .generated-result p { margin: 0 0 16px; line-height: 1.7; }
 .generated-result p:last-child { margin-bottom: 0; }
+.generated-paragraph-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 6px; }
+.generated-paragraph-heading h3 { margin: 0; }
+.paragraph-audio-controls { display: flex; gap: 6px; }
+.paragraph-audio-controls .secondary-button { padding: 5px 9px; font-size: .78rem; }
+.paragraph-audio-controls .secondary-button:disabled { border-color: #cbd2ce; color: #8a938e; cursor: default; }
+.generated-result .paragraph-audio-error { margin: -5px 0 16px; line-height: 1.4; }
 .dictionary-entry { overflow-wrap: anywhere; color: #26342e; font-family: Georgia, "Times New Roman", serif; font-size: 1.02rem; line-height: 1.75; }
 .dictionary-entry.collapsed { position: relative; max-height: 220px; overflow: hidden; }
 .dictionary-entry.collapsed::after { position: absolute; right: 0; bottom: 0; left: 0; height: 72px; background: linear-gradient(to bottom, rgb(255 255 255 / 0%), #fff); content: ""; pointer-events: none; }

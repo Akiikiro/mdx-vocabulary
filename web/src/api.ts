@@ -48,6 +48,7 @@ export interface GeneratedVocabularyParagraph {
 }
 
 export type VocabularyGenerationStage = 'first' | 'retry';
+export type TtsVoice = 'female' | 'male';
 
 export type VocabularyGenerationStreamEvent =
   | { type: 'attempt'; stage: VocabularyGenerationStage }
@@ -198,6 +199,26 @@ export async function streamVocabularyParagraph(
   }
   if (!result) throw new Error('Generation stream ended without a validated result');
   return result;
+}
+
+export async function generateTtsAudio(
+  text: string,
+  voice: TtsVoice,
+  rate: number,
+  signal?: AbortSignal,
+): Promise<Blob> {
+  const response = await fetch('/api/tts', {
+    method: 'POST',
+    headers: { accept: 'audio/mpeg', 'content-type': 'application/json' },
+    body: JSON.stringify({ text, voice, rate }),
+    signal,
+  });
+  if (!response.ok) {
+    let body: ApiErrorBody | null = null;
+    try { body = await response.json() as ApiErrorBody; } catch { /* Use status fallback. */ }
+    throw new Error(body?.error?.message ?? `Request failed (${response.status})`);
+  }
+  return response.blob();
 }
 
 export function addVocabulary(entryId: string): Promise<VocabularyItem> {
