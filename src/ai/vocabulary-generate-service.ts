@@ -128,10 +128,8 @@ ${JSON.stringify(words)}`;
 function correctionPrompt(words: string[], previousOutput: string, errors: string[]): string {
   const length = paragraphLengthPolicy(words.length);
   const actions = correctionActions(words, errors, length);
+  const hasMissingCoverage = errors.some((error) => error.startsWith('paragraph is missing requested items:'));
   return `Correct the previous vocabulary-learning result with minimal edits. Do not freely rewrite content that already passes validation.
-
-Correction actions—repair these detected problems while ensuring the final result satisfies the complete contract below:
-${actions.map((action) => `- ${action}`).join('\n')}
 
 Complete final contract—recheck every requirement before responding, including requirements that were not reported as validation problems:
 - paragraph must contain ${length.min}–${length.max} English words; target ${length.targetMin}–${length.targetMax} words. ${length.sentenceGuidance}
@@ -155,7 +153,12 @@ Validation problems:
 ${JSON.stringify(errors)}
 
 Previous output:
-${previousOutput}`;
+${previousOutput}
+
+Final correction checklist—perform every item before responding:
+${actions.map((action) => `- ${action}`).join('\n')}${hasMissingCoverage ? `
+- Fixing validation failures has priority over preserving previous wording. Keep edits minimal where possible, but make every paragraph change required to fix all missing vocabulary items.
+- Do not return the previous paragraph unchanged.` : ''}`;
 }
 
 function correctionActions(
@@ -172,10 +175,42 @@ function correctionActions(
     }
     if (error.startsWith('paragraph is missing requested items:')) {
       const missing = error.slice('paragraph is missing requested items:'.length).trim();
-      return `Repair paragraph coverage only for these missing items: ${missing}. Add or minimally edit only the sentences needed to use each missing item itself or a simple accepted inflection; preserve every already-valid vocabulary occurrence and avoid derivational replacements.`;
+      const acceptedForms = missing.split(', ').map((item) => {
+        const forms = naturalCorrectionForms(item);
+        return `${item}: ${forms.join(', ')}`;
+      }).join('; ');
+      return `Repair paragraph coverage for all missing items: ${missing}. You must actually modify the paragraph to include every missing item itself or one naturally suitable accepted form. Accepted forms for this correction: ${acceptedForms}. Add or minimally edit only the sentences needed, preserve every already-valid vocabulary occurrence, and avoid derivational replacements.`;
     }
     return `Fix only this validation problem while preserving every other field and already-valid detail: ${error}.`;
   });
+}
+
+function naturalCorrectionForms(item: string): string[] {
+  const normalized = item.trim().normalize('NFKC').toLocaleLowerCase('en-US');
+  if (!/^[a-z]+$/u.test(normalized)) return [item];
+  const forms = new Set([normalized]);
+  if (/(?:s|x|z|ch|sh)$/u.test(normalized)) forms.add(`${normalized}es`);
+  else if (/[^aeiou]y$/u.test(normalized)) forms.add(`${normalized.slice(0, -1)}ies`);
+  else forms.add(`${normalized}s`);
+
+  if (normalized.endsWith('ie')) {
+    forms.add(`${normalized}d`);
+    forms.add(`${normalized.slice(0, -2)}ying`);
+  } else if (normalized.endsWith('e')) {
+    forms.add(`${normalized}d`);
+    forms.add(`${normalized.slice(0, -1)}ing`);
+  } else if (/[^aeiou]y$/u.test(normalized)) {
+    forms.add(`${normalized.slice(0, -1)}ied`);
+    forms.add(`${normalized}ing`);
+  } else if (/[aeiou][^aeiouywx]$/u.test(normalized)) {
+    const doubled = `${normalized}${normalized.at(-1)}`;
+    forms.add(`${doubled}ed`);
+    forms.add(`${doubled}ing`);
+  } else {
+    forms.add(`${normalized}ed`);
+    forms.add(`${normalized}ing`);
+  }
+  return [...forms];
 }
 
 function validateGeneratedResult(text: string, requestedWords: string[]): {

@@ -103,12 +103,14 @@ describe('VocabularyGenerateService', () => {
     expect(provider.generateText).toHaveBeenCalledTimes(2);
     expect(provider.generateText).toHaveBeenNthCalledWith(2, expect.objectContaining({
       prompt: expect.stringMatching(
-        /minimal edits.*Repair paragraph coverage only for these missing items: cat.*preserve every already-valid vocabulary occurrence/s,
+        /minimal edits.*Previous output:.*Final correction checklist.*Repair paragraph coverage for all missing items: cat.*preserve every already-valid vocabulary occurrence/s,
       ),
     }));
     const correctionPrompt = vi.mocked(provider.generateText).mock.calls[1]?.[0].prompt ?? '';
     expect(correctionPrompt).not.toContain('Fix paragraph length only');
     expect(correctionPrompt).not.toContain('Replace usedWords only');
+    expect(correctionPrompt).toContain('Fixing validation failures has priority over preserving previous wording');
+    expect(correctionPrompt).toContain('Do not return the previous paragraph unchanged');
   });
 
   it('collects an extra-field error and short paragraph error for two words, then retries with the complete contract', async () => {
@@ -165,7 +167,8 @@ describe('VocabularyGenerateService', () => {
     expect(prompt).toContain('Make the final paragraph 65–75 English words');
     expect(prompt).toContain('Copy the already-valid usedWords array unchanged as ["cat","dog"]');
     expect(prompt).not.toContain('Replace usedWords only');
-    expect(prompt).not.toContain('Repair paragraph coverage only');
+    expect(prompt).not.toContain('Repair paragraph coverage for all missing items');
+    expect(prompt).not.toContain('Do not return the previous paragraph unchanged');
     expect(provider.generateText).toHaveBeenNthCalledWith(2, expect.objectContaining({ temperature: 0 }));
   });
 
@@ -182,7 +185,32 @@ describe('VocabularyGenerateService', () => {
     const prompt = vi.mocked(provider.generateText).mock.calls[1]?.[0].prompt ?? '';
     expect(prompt).toContain('Replace usedWords only by copying this exact JSON array verbatim: ["cat","dog"]');
     expect(prompt).not.toContain('Fix paragraph length only');
-    expect(prompt).not.toContain('Repair paragraph coverage only');
+    expect(prompt).not.toContain('Repair paragraph coverage for all missing items');
+    expect(prompt).not.toContain('Do not return the previous paragraph unchanged');
+  });
+
+  it('ends a missing-watch correction with explicit natural forms and mandatory repair instructions', async () => {
+    const words = ['watch', 'best', 'bit', 'approve'];
+    const firstParagraph = paragraphWithCount(74, 'best', 'bit', 'approve');
+    const correctedParagraph = paragraphWithCount(74, ...words);
+    const provider = fakeProvider([
+      generatedOutput(words, firstParagraph),
+      generatedOutput(words, correctedParagraph),
+    ]);
+    const service = new VocabularyGenerateService(new AIModelService([provider]));
+
+    await service.generate({ provider: 'fixture', model: 'model-a', words });
+    const prompt = vi.mocked(provider.generateText).mock.calls[1]?.[0].prompt ?? '';
+    const previousOutputIndex = prompt.indexOf('Previous output:');
+    const checklistIndex = prompt.indexOf('Final correction checklist');
+
+    expect(checklistIndex).toBeGreaterThan(previousOutputIndex);
+    expect(prompt.slice(checklistIndex)).toContain('Repair paragraph coverage for all missing items: watch');
+    expect(prompt.slice(checklistIndex)).toContain('You must actually modify the paragraph');
+    expect(prompt.slice(checklistIndex)).toContain('watch: watch, watches, watched, watching');
+    expect(prompt.slice(checklistIndex)).not.toMatch(/\bwatchs\b|\bwatcher\b|\bwatchest\b/u);
+    expect(prompt.slice(checklistIndex)).toContain('Fixing validation failures has priority over preserving previous wording');
+    expect(prompt.trim().endsWith('Do not return the previous paragraph unchanged.')).toBe(true);
   });
 
   it('rejects output that still fails validation after one retry', async () => {
