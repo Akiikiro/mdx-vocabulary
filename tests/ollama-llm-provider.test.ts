@@ -64,6 +64,53 @@ describe('OllamaLLMProvider', () => {
     expect(generationBody.format).toEqual(schema);
   });
 
+  it('streams Ollama NDJSON chunks with the JSON schema and stream enabled', async () => {
+    const schema = { type: 'object', properties: { paragraph: { type: 'string' } } };
+    const bodies: unknown[] = [];
+    const fetchImplementation = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(input.toString());
+      if (url.pathname.endsWith('/api/ps')) return jsonResponse({ models: [{ name: 'gemma3:4b' }] });
+      bodies.push(JSON.parse(String(init?.body)));
+      return chunkedResponse([
+        '{"response":"{\\"paragraph\\":\\"你","done":false}\n{"res',
+        'ponse":"好\\"}","done":false}\n',
+        '{"response":"","done":true}\n',
+      ]);
+    });
+    const provider = new OllamaLLMProvider('http://ollama.test:11434', fetchImplementation);
+
+    const chunks: string[] = [];
+    for await (const chunk of provider.generateTextStream({
+      model: 'gemma3:4b', prompt: 'prompt', temperature: 0.7,
+      responseFormat: { type: 'json_schema', schema },
+    })) chunks.push(chunk.textDelta);
+
+    expect(chunks.join('')).toBe('{"paragraph":"你好"}');
+    expect(bodies).toEqual([expect.objectContaining({ stream: true, format: schema, options: { temperature: 0.7 } })]);
+  });
+
+  it('forwards cancellation to an active Ollama streaming request', async () => {
+    const requestStarted = deferred<AbortSignal>();
+    const fetchImplementation = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(input.toString());
+      if (url.pathname.endsWith('/api/ps')) return jsonResponse({ models: [{ name: 'gemma3:4b' }] });
+      requestStarted.resolve(init?.signal as AbortSignal);
+      return await new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+      });
+    });
+    const provider = new OllamaLLMProvider('http://ollama.test:11434', fetchImplementation);
+    const controller = new AbortController();
+    const iterator = provider.generateTextStream({ model: 'gemma3:4b', prompt: 'prompt' }, controller.signal)[Symbol.asyncIterator]();
+    const pending = iterator.next();
+    const forwardedSignal = await requestStarted.promise;
+
+    controller.abort();
+
+    expect(forwardedSignal.aborted).toBe(true);
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
   it('treats an omitted latest tag as exactly equivalent when checking loaded models', async () => {
     const fetchImplementation = vi.fn(async (input: string | URL | Request, _init?: RequestInit) => {
       const url = new URL(input.toString());
@@ -201,6 +248,16 @@ describe('OllamaLLMProvider', () => {
 
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+}
+
+function chunkedResponse(chunks: string[]): Response {
+  const encoder = new TextEncoder();
+  return new Response(new ReadableStream({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+      controller.close();
+    },
+  }), { status: 200 });
 }
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {

@@ -2,6 +2,7 @@ import {
   LLMProviderError,
   type LLMModel,
   type LLMProvider,
+  type LLMTextGenerationChunk,
   type LLMTextGenerationRequest,
   type LLMTextGenerationResult,
 } from './llm-provider.js';
@@ -89,6 +90,67 @@ export class OllamaLLMProvider implements LLMProvider {
     return { model: typeof body.model === 'string' ? body.model : request.model, text: body.response };
   }
 
+  async *generateTextStream(
+    request: LLMTextGenerationRequest,
+    signal?: AbortSignal,
+  ): AsyncIterable<LLMTextGenerationChunk> {
+    await this.ensureModelLoaded(request.model);
+    if (signal?.aborted) throw signal.reason;
+
+    let response: Response;
+    try {
+      response = await this.fetchImplementation(new URL('api/generate', this.baseUrl), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          model: request.model,
+          prompt: request.prompt,
+          stream: true,
+          ...(request.responseFormat === 'json'
+            ? { format: 'json' }
+            : request.responseFormat?.type === 'json_schema'
+              ? { format: request.responseFormat.schema }
+              : {}),
+          options: {
+            ...(request.temperature === undefined ? {} : { temperature: request.temperature }),
+            ...(request.maxOutputTokens === undefined ? {} : { num_predict: request.maxOutputTokens }),
+          },
+        }),
+        signal: combineSignals(AbortSignal.timeout(this.generationTimeoutMs), signal),
+      });
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason;
+      throw new LLMProviderError('LLM_PROVIDER_UNAVAILABLE', 'Ollama is unavailable');
+    }
+    if (!response.ok || !response.body) {
+      throw new LLMProviderError('LLM_PROVIDER_UNAVAILABLE', 'Ollama is unavailable');
+    }
+
+    let completed = false;
+    try {
+      for await (const line of ndjsonLines(response.body)) {
+        let chunk: OllamaGenerateResponse & { done?: unknown };
+        try {
+          chunk = JSON.parse(line) as OllamaGenerateResponse & { done?: unknown };
+        } catch {
+          throw new LLMProviderError('LLM_PROVIDER_INVALID_RESPONSE', 'Ollama returned invalid streaming JSON');
+        }
+        if (typeof chunk.response !== 'string' || typeof chunk.done !== 'boolean') {
+          throw new LLMProviderError('LLM_PROVIDER_INVALID_RESPONSE', 'Ollama returned an invalid streaming response');
+        }
+        if (chunk.response) yield { textDelta: chunk.response };
+        if (chunk.done) completed = true;
+      }
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason;
+      if (error instanceof LLMProviderError) throw error;
+      throw new LLMProviderError('LLM_PROVIDER_UNAVAILABLE', 'Ollama is unavailable');
+    }
+    if (!completed) {
+      throw new LLMProviderError('LLM_PROVIDER_INVALID_RESPONSE', 'Ollama ended an incomplete streaming response');
+    }
+  }
+
   private async ensureModelLoaded(model: string): Promise<void> {
     const normalizedModel = normalizeModelTag(model);
     if (await this.isModelLoaded(normalizedModel)) return;
@@ -144,6 +206,30 @@ export class OllamaLLMProvider implements LLMProvider {
       throw new LLMProviderError('LLM_PROVIDER_INVALID_RESPONSE', 'Ollama returned invalid JSON');
     }
   }
+}
+
+async function* ndjsonLines(stream: ReadableStream<Uint8Array>): AsyncIterable<string> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let buffered = '';
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffered += decoder.decode(value, { stream: true });
+      const lines = buffered.split('\n');
+      buffered = lines.pop() ?? '';
+      for (const line of lines) if (line.trim()) yield line;
+    }
+    buffered += decoder.decode();
+    if (buffered.trim()) yield buffered;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function combineSignals(timeout: AbortSignal, signal?: AbortSignal): AbortSignal {
+  return signal ? AbortSignal.any([timeout, signal]) : timeout;
 }
 
 function normalizeModelTag(value: string): string {

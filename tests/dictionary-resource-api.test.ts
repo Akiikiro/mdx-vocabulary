@@ -18,6 +18,7 @@ describe('dictionary resource HTTP API', () => {
   let server: FastifyInstance;
   let aiUnavailable = false;
   let aiGenerationText = validGeneratedParagraph('fixture');
+  let aiStreamingTexts: string[] | null = null;
   const lookupResource = vi.fn((volume: string, key: string) => {
     if (volume.includes(dictionaryA) && key === '\\audio\\日本語\\東京.ogg') return Buffer.from('OggSunicode');
     if (volume.includes(dictionaryA) && key === '\\Audio\\Test.OGG') return Buffer.from('OggScase');
@@ -49,6 +50,10 @@ describe('dictionary resource HTTP API', () => {
         return [{ id: 'fixture:latest', displayName: 'fixture:latest' }];
       },
       generateText: async (request) => ({ model: request.model, text: aiGenerationText }),
+      generateTextStream: async function* () {
+        const text = aiStreamingTexts?.shift() ?? aiGenerationText;
+        for (let index = 0; index < text.length; index += 9) yield { textDelta: text.slice(index, index + 9) };
+      },
     };
     server = await createApiServer(database, {
       packageStorage: new DictionaryPackageStorage(root), mddResourceAdapter: adapter,
@@ -230,6 +235,53 @@ describe('dictionary resource HTTP API', () => {
     } });
   });
 
+  it('streams paragraph-only deltas and resets the draft before correction', async () => {
+    const invalidParagraph = paragraphContaining('other');
+    const correctedParagraph = paragraphContaining('fixture');
+    aiStreamingTexts = [
+      JSON.stringify({ paragraph: invalidParagraph, translation: '初稿。', usedWords: ['fixture'] }),
+      JSON.stringify({ paragraph: correctedParagraph, translation: '自然的中文翻译。', usedWords: ['fixture'] }),
+    ];
+
+    const response = await server.inject({
+      method: 'POST', url: '/api/ai/generate-paragraph/stream',
+      payload: { provider: 'ollama', model: 'fixture:latest', words: ['fixture'] },
+    });
+    aiStreamingTexts = null;
+    const events = response.body.trim().split('\n').map((line) => JSON.parse(line));
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toContain('application/x-ndjson');
+    expect(events.filter((event) => event.type === 'attempt')).toEqual([
+      { type: 'attempt', stage: 'first' },
+      { type: 'attempt', stage: 'retry' },
+    ]);
+    const deltas = events.filter((event) => event.type === 'paragraph_delta');
+    expect(deltas.map((event) => event.text).join('')).toBe(`${invalidParagraph}${correctedParagraph}`);
+    expect(response.body).not.toContain('\\"paragraph\\"');
+    expect(events.at(-1)).toEqual({ type: 'result', result: {
+      paragraph: correctedParagraph, translation: '自然的中文翻译。', usedWords: ['fixture'],
+    } });
+  });
+
+  it('returns streaming generation failures as a terminal NDJSON error event', async () => {
+    aiStreamingTexts = ['not json', 'still not json'];
+    const response = await server.inject({
+      method: 'POST', url: '/api/ai/generate-paragraph/stream',
+      payload: { provider: 'ollama', model: 'fixture:latest', words: ['fixture'] },
+    });
+    aiStreamingTexts = null;
+    const events = response.body.trim().split('\n').map((line) => JSON.parse(line));
+
+    expect(events.at(-1)).toEqual({
+      type: 'error',
+      error: {
+        code: 'AI_GENERATION_INVALID_RESPONSE',
+        message: 'AI generation did not produce a valid vocabulary paragraph',
+      },
+    });
+  });
+
   it('documents vocabulary paragraph generation in OpenAPI', async () => {
     const response = await server.inject({ method: 'GET', url: '/docs/json' });
     const route = response.json().paths['/api/ai/generate-paragraph'].post;
@@ -238,6 +290,13 @@ describe('dictionary resource HTTP API', () => {
     }));
     expect(route.responses['200'].content['application/json'].schema).toEqual(expect.objectContaining({
       required: ['paragraph', 'translation', 'usedWords'],
+    }));
+    const streamRoute = response.json().paths['/api/ai/generate-paragraph/stream'].post;
+    expect(streamRoute.requestBody.content['application/json'].schema).toEqual(expect.objectContaining({
+      required: ['provider', 'model', 'words'], additionalProperties: false,
+    }));
+    expect(streamRoute.responses['200'].content['application/x-ndjson'].schema).toEqual(expect.objectContaining({
+      type: 'string',
     }));
   });
 });

@@ -47,6 +47,14 @@ export interface GeneratedVocabularyParagraph {
   usedWords: string[];
 }
 
+export type VocabularyGenerationStage = 'first' | 'retry';
+
+export type VocabularyGenerationStreamEvent =
+  | { type: 'attempt'; stage: VocabularyGenerationStage }
+  | { type: 'paragraph_delta'; stage: VocabularyGenerationStage; text: string }
+  | { type: 'result'; result: GeneratedVocabularyParagraph }
+  | { type: 'error'; error: { code: string; message: string } };
+
 export interface DictionaryPackageImport {
   dictionaryId: string;
   jobId: string;
@@ -135,6 +143,61 @@ export function generateVocabularyParagraph(
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ provider, model, words }),
   });
+}
+
+export async function streamVocabularyParagraph(
+  provider: string,
+  model: string,
+  words: string[],
+  handlers: {
+    onAttempt?: (stage: VocabularyGenerationStage) => void;
+    onParagraphDelta?: (text: string, stage: VocabularyGenerationStage) => void;
+  } = {},
+  signal?: AbortSignal,
+): Promise<GeneratedVocabularyParagraph> {
+  const response = await fetch('/api/ai/generate-paragraph/stream', {
+    method: 'POST',
+    headers: { accept: 'application/x-ndjson', 'content-type': 'application/json' },
+    body: JSON.stringify({ provider, model, words }),
+    signal,
+  });
+  if (!response.ok) {
+    let body: ApiErrorBody | null = null;
+    try { body = await response.json() as ApiErrorBody; } catch { /* Use status fallback. */ }
+    throw new Error(body?.error?.message ?? `Request failed (${response.status})`);
+  }
+  if (!response.body) throw new Error('Streaming response is unavailable');
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffered = '';
+  let result: GeneratedVocabularyParagraph | null = null;
+
+  const consumeLine = (line: string) => {
+    if (!line.trim()) return;
+    const event = JSON.parse(line) as VocabularyGenerationStreamEvent;
+    if (event.type === 'attempt') handlers.onAttempt?.(event.stage);
+    else if (event.type === 'paragraph_delta') handlers.onParagraphDelta?.(event.text, event.stage);
+    else if (event.type === 'result') result = event.result;
+    else if (event.type === 'error') throw new Error(event.error.message);
+  };
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffered += decoder.decode(value, { stream: true });
+      const lines = buffered.split('\n');
+      buffered = lines.pop() ?? '';
+      for (const line of lines) consumeLine(line);
+    }
+    buffered += decoder.decode();
+    consumeLine(buffered);
+  } finally {
+    reader.releaseLock();
+  }
+  if (!result) throw new Error('Generation stream ended without a validated result');
+  return result;
 }
 
 export function addVocabulary(entryId: string): Promise<VocabularyItem> {

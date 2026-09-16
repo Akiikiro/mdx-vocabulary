@@ -23,11 +23,19 @@ export interface LLMTextGenerationResult {
   text: string;
 }
 
+export interface LLMTextGenerationChunk {
+  textDelta: string;
+}
+
 export interface LLMProvider {
   readonly id: string;
   readonly displayName: string;
   listModels(): Promise<LLMModel[]>;
   generateText(request: LLMTextGenerationRequest): Promise<LLMTextGenerationResult>;
+  generateTextStream?(
+    request: LLMTextGenerationRequest,
+    signal?: AbortSignal,
+  ): AsyncIterable<LLMTextGenerationChunk>;
 }
 
 export class LLMProviderError extends Error {

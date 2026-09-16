@@ -22,7 +22,7 @@
 - Dictionary 可声明可选 stylesheet URL；Oxford 8 使用随 Web 应用发布的 `O8C.css`，恢复 sanitized HTML 中保留 class 所支持的词典样式。前端通过安全的 MDict marker 显示 MDD 图片和发音控件，并在当前 dictionary 内解析内部词条引用。
 - Package 中唯一的 CSS 会自动绑定并由 Fastify dictionary asset route 提供；已知 stylesheet 通过内容 fingerprint 获得 rendering compatibility profile，使重复导入保持相同 override。MDD 资源按 dictionary 保存并由 scoped resource API 按需读取。
 - 单用户本地 Vocabulary Book：收藏词条到 PostgreSQL、持久展示、重新打开完整词条和移除收藏。
-- Vocabulary Book 可勾选已收藏词条，动态选择已配置的 AI provider/model，并生成经过结构和词汇覆盖校验的中英双语复习段落。
+- Vocabulary Book 可勾选已收藏词条，动态选择已配置的 AI provider/model，实时显示生成中的英文正文，并在结构和词汇覆盖校验通过后显示完整中英双语复习段落。
 - Importer、查询服务、HTTP API 的单元及 PostgreSQL integration tests。
 
 ## 架构
@@ -306,6 +306,7 @@ http://127.0.0.1:3000
 | GET | `/api/experimental/edge-tts?word=<word>&voice=female|male` | 实验性 Edge TTS 发音；女性固定使用 `en-US-AvaNeural`，男性固定使用 `en-US-BrianNeural`，生成并分别缓存 MP3。 |
 | GET | `/api/ai/models` | 返回已配置 AI providers 及动态发现的 models；响应使用应用自有稳定 DTO。 |
 | POST | `/api/ai/generate-paragraph` | 接受运行时 `{ provider, model, words }`，返回 `{ paragraph, translation, usedWords }`；无效生成最多纠正重试一次。 |
+| POST | `/api/ai/generate-paragraph/stream` | 接受相同请求并返回 NDJSON attempt、正文 delta 和最终 validated result；纠正重试前发送新的 attempt 以重置 draft。 |
 | GET | `/api/dictionaries/:dictionaryId/search` | 搜索指定 ready dictionary；支持 `q`、`mode`、`limit`、`offset`。 |
 | GET | `/api/entries/:entryId` | 获取 entry detail 和 sanitized HTML。 |
 | GET | `/api/vocabulary` | 按添加时间倒序列出收藏及其安全 entry 摘要。 |

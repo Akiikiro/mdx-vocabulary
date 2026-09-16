@@ -1,7 +1,6 @@
 import { type KeyboardEvent, useEffect, useRef, useState } from 'react';
 import {
   addVocabulary,
-  generateVocabularyParagraph,
   getEntry,
   getDictionaryImportStatus,
   importDictionaryPackage,
@@ -10,6 +9,7 @@ import {
   listVocabulary,
   removeVocabulary,
   searchEntries,
+  streamVocabularyParagraph,
   type AIProviderModels,
   type Dictionary,
   type EntryDetail,
@@ -39,6 +39,7 @@ export function App() {
   const [aiProviderId, setAIProviderId] = useState('');
   const [aiModelId, setAIModelId] = useState('');
   const [generatedParagraph, setGeneratedParagraph] = useState<GeneratedVocabularyParagraph | null>(null);
+  const [paragraphDraft, setParagraphDraft] = useState('');
   const [loadingDictionaries, setLoadingDictionaries] = useState(true);
   const [searching, setSearching] = useState(false);
   const [loadingDetail, setLoadingDetail] = useState(false);
@@ -56,6 +57,7 @@ export function App() {
   const [importStatus, setImportStatus] = useState('');
   const autocompleteController = useRef<AbortController | null>(null);
   const detailController = useRef<AbortController | null>(null);
+  const generationController = useRef<AbortController | null>(null);
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const skipAutocompleteValue = useRef<string | null>(null);
   const styledDictionaryId = detail?.dictionaryId ?? dictionaryId;
@@ -65,6 +67,8 @@ export function App() {
   )?.stylesheetCompatibilityProfile ?? null;
 
   useDictionaryStylesheet(dictionaryStylesheetUrl, dictionaryStylesheetCompatibilityProfile);
+
+  useEffect(() => () => generationController.current?.abort(), []);
 
   useEffect(() => {
     let active = true;
@@ -318,12 +322,27 @@ export function App() {
     setGeneratingParagraph(true);
     setGenerationError('');
     setGeneratedParagraph(null);
+    setParagraphDraft('');
+    const controller = new AbortController();
+    generationController.current?.abort();
+    generationController.current = controller;
     try {
-      setGeneratedParagraph(await generateVocabularyParagraph(aiProviderId, aiModelId, selectedWords));
+      const result = await streamVocabularyParagraph(aiProviderId, aiModelId, selectedWords, {
+        onAttempt: () => setParagraphDraft(''),
+        onParagraphDelta: (text) => setParagraphDraft((current) => current + text),
+      }, controller.signal);
+      setGeneratedParagraph(result);
+      setParagraphDraft('');
     } catch (reason) {
-      setGenerationError(messageFrom(reason));
+      if (!controller.signal.aborted) {
+        setParagraphDraft('');
+        setGenerationError(messageFrom(reason));
+      }
     } finally {
-      setGeneratingParagraph(false);
+      if (generationController.current === controller) {
+        generationController.current = null;
+        setGeneratingParagraph(false);
+      }
     }
   }
 
@@ -594,6 +613,12 @@ export function App() {
             </div>
             {loadingAIModels && <p className="status" role="status">Loading AI models…</p>}
             {generationError && <p className="error generator-error" role="alert">{generationError}</p>}
+            {generatingParagraph && (
+              <article className="generated-result generated-draft" aria-live="polite">
+                <h3>English paragraph</h3>
+                <p>{paragraphDraft || 'Starting generation…'}</p>
+              </article>
+            )}
             {generatedParagraph && (
               <article className="generated-result" aria-live="polite">
                 <h3>English paragraph</h3>

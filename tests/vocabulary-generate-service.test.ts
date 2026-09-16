@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AIModelService } from '../src/ai/ai-model-service.js';
 import { LLMProviderError, type LLMProvider } from '../src/ai/llm-provider.js';
-import { VocabularyGenerateService } from '../src/ai/vocabulary-generate-service.js';
+import {
+  VocabularyGenerateService,
+  type VocabularyGenerationStreamEvent,
+} from '../src/ai/vocabulary-generate-service.js';
 
 describe('VocabularyGenerateService', () => {
   it('uses a runtime-selected provider/model and validates inflected coverage', async () => {
@@ -302,6 +305,51 @@ describe('VocabularyGenerateService', () => {
       code: 'AI_PROVIDER_UNAVAILABLE', message: 'AI provider is unavailable',
     });
   });
+
+  it('streams paragraph text without JSON syntax and finishes with the validated result', async () => {
+    const words = ['watch', 'best'];
+    const paragraph = paragraphWithCount(70, ...words);
+    const provider = streamingProvider([generatedOutput(words, paragraph)]);
+    const service = new VocabularyGenerateService(new AIModelService([provider]));
+
+    const events = await collectEvents(service.generateStream({ provider: 'fixture', model: 'model-a', words }));
+
+    expect(events[0]).toEqual({ type: 'attempt', stage: 'first' });
+    const draft = events.filter((event) => event.type === 'paragraph_delta').map((event) => event.text).join('');
+    expect(draft).toBe(paragraph);
+    expect(draft).not.toContain('{"paragraph"');
+    expect(events.at(-1)).toEqual({
+      type: 'result', result: { paragraph, translation: '自然的中文翻译。', usedWords: words },
+    });
+  });
+
+  it('resets the streaming draft for one correction retry and keeps its established request settings', async () => {
+    const words = ['cat'];
+    const firstParagraph = paragraphWithCount(70, 'dog');
+    const correctedParagraph = paragraphWithCount(70, 'cat');
+    const provider = streamingProvider([
+      generatedOutput(words, firstParagraph),
+      generatedOutput(words, correctedParagraph),
+    ]);
+    const service = new VocabularyGenerateService(new AIModelService([provider]));
+
+    const events = await collectEvents(service.generateStream({ provider: 'fixture', model: 'model-a', words }));
+
+    expect(events.filter((event) => event.type === 'attempt')).toEqual([
+      { type: 'attempt', stage: 'first' },
+      { type: 'attempt', stage: 'retry' },
+    ]);
+    expect(events.filter((event) => event.type === 'paragraph_delta' && event.stage === 'first')
+      .map((event) => event.type === 'paragraph_delta' ? event.text : '').join('')).toBe(firstParagraph);
+    expect(events.filter((event) => event.type === 'paragraph_delta' && event.stage === 'retry')
+      .map((event) => event.type === 'paragraph_delta' ? event.text : '').join('')).toBe(correctedParagraph);
+    expect(provider.generateTextStream).toHaveBeenCalledTimes(2);
+    expect(provider.generateTextStream).toHaveBeenNthCalledWith(1, expect.objectContaining({ temperature: 0.7 }), undefined);
+    expect(provider.generateTextStream).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      temperature: 0,
+      prompt: expect.stringContaining('Validation problems:'),
+    }), undefined);
+  });
 });
 
 function fakeProvider(outputs: string[]): LLMProvider {
@@ -314,10 +362,29 @@ function fakeProvider(outputs: string[]): LLMProvider {
   };
 }
 
+function streamingProvider(outputs: string[]): LLMProvider {
+  return {
+    ...fakeProvider([]),
+    generateTextStream: vi.fn(async function* (_request, signal) {
+      const output = outputs.shift() ?? '';
+      for (let index = 0; index < output.length; index += 7) {
+        if (signal?.aborted) throw signal.reason;
+        yield { textDelta: output.slice(index, index + 7) };
+      }
+    }),
+  };
+}
+
 function paragraphWithCount(count: number, ...featuredWords: string[]): string {
   return [...featuredWords, ...Array.from({ length: count - featuredWords.length }, () => 'learner')].join(' ');
 }
 
 function generatedOutput(usedWords: string[], paragraph: string): string {
   return JSON.stringify({ paragraph, translation: '自然的中文翻译。', usedWords });
+}
+
+async function collectEvents(events: AsyncIterable<VocabularyGenerationStreamEvent>): Promise<VocabularyGenerationStreamEvent[]> {
+  const collected: VocabularyGenerationStreamEvent[] = [];
+  for await (const event of events) collected.push(event);
+  return collected;
 }

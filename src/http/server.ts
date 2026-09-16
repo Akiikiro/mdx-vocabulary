@@ -4,6 +4,7 @@ import swaggerUi from '@fastify/swagger-ui';
 import multipart from '@fastify/multipart';
 import type { PrismaClient } from '@prisma/client';
 import { createReadStream } from 'node:fs';
+import { Readable } from 'node:stream';
 import { spawn } from 'node:child_process';
 import { AIModelService } from '../ai/ai-model-service.js';
 import { LLMProviderError, type LLMProvider } from '../ai/llm-provider.js';
@@ -161,6 +162,17 @@ const generatedParagraphSchema = {
     usedWords: { type: 'array', items: { type: 'string' } },
   },
 } as const;
+const generateParagraphBodySchema = {
+  type: 'object', required: ['provider', 'model', 'words'], additionalProperties: false,
+  properties: {
+    provider: { type: 'string', minLength: 1, maxLength: 200 },
+    model: { type: 'string', minLength: 1, maxLength: 200 },
+    words: {
+      type: 'array', minItems: 1, maxItems: 30,
+      items: { type: 'string', minLength: 1, maxLength: 100 },
+    },
+  },
+} as const;
 
 function errorBody(code: string, message: string) {
   return { error: { code, message } };
@@ -315,17 +327,7 @@ export async function createApiServer(database: PrismaClient, options: ApiServer
   app.post<{ Body: GenerateParagraphBody }>('/api/ai/generate-paragraph', {
     schema: {
       operationId: 'generateVocabularyParagraph', summary: 'Generate a bilingual vocabulary review paragraph', tags: ['ai'],
-      body: {
-        type: 'object', required: ['provider', 'model', 'words'], additionalProperties: false,
-        properties: {
-          provider: { type: 'string', minLength: 1, maxLength: 200 },
-          model: { type: 'string', minLength: 1, maxLength: 200 },
-          words: {
-            type: 'array', minItems: 1, maxItems: 30,
-            items: { type: 'string', minLength: 1, maxLength: 100 },
-          },
-        },
-      },
+      body: generateParagraphBodySchema,
       response: {
         200: generatedParagraphSchema,
         400: errorSchema, 502: errorSchema, 503: errorSchema, 500: errorSchema,
@@ -343,6 +345,49 @@ export async function createApiServer(database: PrismaClient, options: ApiServer
       }
       throw error;
     }
+  });
+
+  app.post<{ Body: GenerateParagraphBody }>('/api/ai/generate-paragraph/stream', {
+    schema: {
+      operationId: 'streamVocabularyParagraph', summary: 'Stream a bilingual vocabulary review paragraph', tags: ['ai'],
+      body: generateParagraphBodySchema,
+      produces: ['application/x-ndjson'],
+      response: {
+        200: { type: 'string', description: 'Newline-delimited vocabulary generation events' },
+        400: errorSchema, 500: errorSchema,
+      },
+    },
+  }, async (request, reply) => {
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    request.raw.once('aborted', abort);
+    reply.raw.once('close', () => {
+      if (!reply.raw.writableEnded) abort();
+    });
+
+    async function* eventLines(): AsyncIterable<string> {
+      try {
+        for await (const event of vocabularyGenerateService.generateStream(request.body, controller.signal)) {
+          yield `${JSON.stringify(event)}\n`;
+        }
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        if (error instanceof VocabularyGenerateError) {
+          yield `${JSON.stringify({ error: { code: error.code, message: error.message }, type: 'error' })}\n`;
+          return;
+        }
+        app.log.error(error);
+        yield `${JSON.stringify({ error: { code: 'INTERNAL_ERROR', message: 'An unexpected error occurred' }, type: 'error' })}\n`;
+      } finally {
+        request.raw.off('aborted', abort);
+      }
+    }
+
+    return reply
+      .header('cache-control', 'no-cache, no-transform')
+      .header('x-accel-buffering', 'no')
+      .type('application/x-ndjson; charset=utf-8')
+      .send(Readable.from(eventLines()));
   });
 
   app.setErrorHandler((error, _request, reply) => {

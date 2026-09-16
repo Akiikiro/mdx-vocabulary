@@ -1,5 +1,7 @@
 import { AIModelService } from './ai-model-service.js';
+import { IncrementalJsonStringField } from './incremental-json-string-field.js';
 import { LLMProviderError } from './llm-provider.js';
+import type { LLMProvider, LLMTextGenerationRequest } from './llm-provider.js';
 
 const MAX_VOCABULARY_ITEMS = 30;
 const MAX_VOCABULARY_ITEM_LENGTH = 100;
@@ -33,6 +35,13 @@ export interface VocabularyGenerateResult {
   translation: string;
   usedWords: string[];
 }
+
+export type VocabularyGenerationStage = 'first' | 'retry';
+
+export type VocabularyGenerationStreamEvent =
+  | { type: 'attempt'; stage: VocabularyGenerationStage }
+  | { type: 'paragraph_delta'; stage: VocabularyGenerationStage; text: string }
+  | { type: 'result'; result: VocabularyGenerateResult };
 
 export class VocabularyGenerateError extends Error {
   constructor(
@@ -96,6 +105,89 @@ export class VocabularyGenerateService {
       }
       throw error;
     }
+  }
+
+  async *generateStream(
+    request: VocabularyGenerateRequest,
+    signal?: AbortSignal,
+  ): AsyncIterable<VocabularyGenerationStreamEvent> {
+    const providerId = requiredIdentifier(request.provider, 'provider');
+    const modelId = requiredIdentifier(request.model, 'model');
+    const words = validateWords(request.words);
+    const provider = this.models.getProvider(providerId);
+    if (!provider) throw new VocabularyGenerateError('AI_PROVIDER_NOT_FOUND', 'AI provider not found');
+
+    try {
+      const availableModels = await provider.listModels();
+      if (!availableModels.some((model) => model.id === modelId)) {
+        throw new VocabularyGenerateError('AI_MODEL_NOT_FOUND', 'AI model not found');
+      }
+
+      yield { type: 'attempt', stage: 'first' };
+      const firstText = yield* this.generateAttempt(provider, {
+        model: modelId,
+        prompt: initialPrompt(words),
+        responseFormat: { type: 'json_schema', schema: VOCABULARY_GENERATION_SCHEMA },
+        temperature: 0.7,
+        maxOutputTokens: 900,
+      }, 'first', signal);
+      const firstValidation = validateGeneratedResult(firstText, words);
+      logGenerationValidation('first', words, firstValidation);
+      if (firstValidation.result) {
+        yield { type: 'result', result: firstValidation.result };
+        return;
+      }
+
+      yield { type: 'attempt', stage: 'retry' };
+      const correctedText = yield* this.generateAttempt(provider, {
+        model: modelId,
+        prompt: correctionPrompt(words, firstText, firstValidation.errors),
+        responseFormat: { type: 'json_schema', schema: VOCABULARY_GENERATION_SCHEMA },
+        temperature: 0,
+        maxOutputTokens: 900,
+      }, 'retry', signal);
+      const correctedValidation = validateGeneratedResult(correctedText, words);
+      logGenerationValidation('retry', words, correctedValidation);
+      if (correctedValidation.result) {
+        yield { type: 'result', result: correctedValidation.result };
+        return;
+      }
+      throw new VocabularyGenerateError(
+        'AI_GENERATION_INVALID_RESPONSE',
+        'AI generation did not produce a valid vocabulary paragraph',
+      );
+    } catch (error) {
+      if (error instanceof VocabularyGenerateError) throw error;
+      if (error instanceof LLMProviderError) {
+        throw new VocabularyGenerateError('AI_PROVIDER_UNAVAILABLE', 'AI provider is unavailable');
+      }
+      throw error;
+    }
+  }
+
+  private async *generateAttempt(
+    provider: LLMProvider,
+    request: LLMTextGenerationRequest,
+    stage: VocabularyGenerationStage,
+    signal?: AbortSignal,
+  ): AsyncGenerator<VocabularyGenerationStreamEvent, string> {
+    const extractor = new IncrementalJsonStringField('paragraph');
+    let raw = '';
+    if (provider.generateTextStream) {
+      for await (const chunk of provider.generateTextStream(request, signal)) {
+        raw += chunk.textDelta;
+        const text = extractor.push(chunk.textDelta);
+        if (text) yield { type: 'paragraph_delta', stage, text };
+      }
+    } else {
+      if (signal?.aborted) throw signal.reason;
+      const result = await provider.generateText(request);
+      if (signal?.aborted) throw signal.reason;
+      raw = result.text;
+      const text = extractor.push(result.text);
+      if (text) yield { type: 'paragraph_delta', stage, text };
+    }
+    return raw;
   }
 }
 
