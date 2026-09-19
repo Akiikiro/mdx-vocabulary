@@ -12,6 +12,7 @@ function positiveIntegerEnvironment(name: string, fallback: number): number {
 export const config = {
   databaseUrl: process.env.DATABASE_URL!,
   dataDir: path.resolve(process.env.APP_DATA_DIR ?? './data'),
+  webDistDir: process.env.WEB_DIST_DIR?.trim() ? path.resolve(process.env.WEB_DIST_DIR) : null,
   batchSize: Number(process.env.IMPORT_BATCH_SIZE ?? '100'),
   ollamaBaseUrl: process.env.OLLAMA_BASE_URL?.trim() || null,
   ollamaRequestTimeoutMs: positiveIntegerEnvironment('OLLAMA_REQUEST_TIMEOUT_MS', 15_000),

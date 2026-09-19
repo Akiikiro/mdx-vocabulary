@@ -1,0 +1,15 @@
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+node_modules
+web/node_modules
+dist
+web/dist
+coverage
+data
+*.log
+*.tsbuildinfo
+Dockerfile*
+docker-compose*.yml

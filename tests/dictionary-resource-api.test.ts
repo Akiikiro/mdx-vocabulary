@@ -31,6 +31,8 @@ describe('dictionary resource HTTP API', () => {
 
   beforeAll(async () => {
     root = await fsp.mkdtemp(path.join(os.tmpdir(), 'resource-api-'));
+    await fsp.mkdir(path.join(root, 'web-dist'), { recursive: true });
+    await fsp.writeFile(path.join(root, 'web-dist', 'index.html'), '<!doctype html><title>MDX Vocabulary</title>');
     for (const id of [dictionaryA, dictionaryB]) {
       const directory = path.join(root, 'dictionaries', id, 'resources');
       await fsp.mkdir(directory, { recursive: true });
@@ -78,6 +80,7 @@ describe('dictionary resource HTTP API', () => {
         },
         getTextAudio,
       },
+      webDistPath: path.join(root, 'web-dist'),
       llmProviders: [llmProvider],
       startImportJob: () => {},
     });
@@ -97,6 +100,13 @@ describe('dictionary resource HTTP API', () => {
     expect(response.headers['content-type']).toBe('audio/ogg');
     expect(response.rawPayload).toEqual(Buffer.from('OggSunicode'));
     expect(lookupResource).toHaveBeenCalledWith(expect.stringContaining(dictionaryA), '\\audio\\日本語\\東京.ogg');
+  });
+
+  it('serves the production web build from Fastify when configured', async () => {
+    const response = await server.inject({ method: 'GET', url: '/' });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toContain('text/html');
+    expect(response.body).toContain('<title>MDX Vocabulary</title>');
   });
 
   it('preserves case and does not silently retry a folded key', async () => {

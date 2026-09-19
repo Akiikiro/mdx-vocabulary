@@ -137,6 +137,40 @@ npm install
 cd ..
 ```
 
+## Docker production 运行
+
+仓库根目录的 multi-stage `Dockerfile` 会分别安装并编译后端、构建 Vite production assets，最终镜像只保留 production Node dependencies、编译后的 Fastify 服务、Prisma schema/migrations、`ffmpeg` 和 `web/dist`。production 不运行 Vite dev server；Fastify 从 `WEB_DIST_DIR` 同源提供静态文件，因此浏览器中的 `/api/...` 相对请求保持不变。
+
+启动应用和 PostgreSQL：
+
+```bash
+docker compose up --build -d
+docker compose logs -f app
+```
+
+打开：
+
+```text
+Web App: http://localhost:3000/
+Swagger: http://localhost:3000/docs/
+```
+
+停止容器但保留数据库和 dictionary data：
+
+```bash
+docker compose down
+```
+
+`postgres-data` 保存 PostgreSQL 数据，`app-data` 保存导入的 MDX package 和音频缓存。不要使用 `docker compose down -v`，除非明确要删除这些数据。app 启动时会在连接到健康的 PostgreSQL 后运行 `prisma migrate deploy`。
+
+Ollama 不在 compose 中启动。默认 `OLLAMA_BASE_URL` 是 `http://host.docker.internal:11435`，适用于 Ollama 可由 Docker host 转发访问的情况。如果 Ollama 运行在另一台 Windows 主机，应使用 Windows 的局域网地址启动：
+
+```bash
+OLLAMA_BASE_URL=http://192.168.1.50:11435 docker compose up --build -d
+```
+
+Windows Ollama 必须监听可从局域网访问的地址，而不只是 `127.0.0.1`，Windows 防火墙也需要允许 Mac 访问对应 TCP 端口。可以先在 Mac 上用 `curl http://<windows-ip>:11435/api/tags` 验证，再启动 compose。容器通过 Docker Desktop 的出站网络直接访问该 Windows IP；`db` 则通过 compose service name `db:5432` 访问。
+
 ## PostgreSQL 和 Prisma 准备
 
 创建本地数据库。以下命令以数据库名 `mdx_vocabulary` 为例：
@@ -169,6 +203,7 @@ OLLAMA_GENERATION_TIMEOUT_MS="60000"
 | --- | --- | --- |
 | `DATABASE_URL` | 是 | Prisma PostgreSQL connection URL。 |
 | `APP_DATA_DIR` | 否 | 保存导入 MDX 的目录，默认 `./data`。 |
+| `WEB_DIST_DIR` | 否 | Vite production build 目录；设置后由 Fastify 从同一 origin 提供静态文件。Docker 镜像固定为 `/app/web-dist`。 |
 | `IMPORT_BATCH_SIZE` | 否 | 每次批量写入的 entry 数量，默认 `100`。 |
 | `OLLAMA_BASE_URL` | 否 | Ollama 服务的 HTTP(S) base URL；配置后启用 Ollama model discovery。 |
 | `OLLAMA_REQUEST_TIMEOUT_MS` | 否 | Ollama model discovery 和 runner 状态请求超时；默认 `15000`。 |

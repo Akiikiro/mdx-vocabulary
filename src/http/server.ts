@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import swagger from '@fastify/swagger';
 import swaggerUi from '@fastify/swagger-ui';
 import multipart from '@fastify/multipart';
+import fastifyStatic from '@fastify/static';
 import type { PrismaClient } from '@prisma/client';
 import { createReadStream } from 'node:fs';
 import { Readable } from 'node:stream';
@@ -80,6 +81,7 @@ export interface ApiServerOptions {
   llmProviders?: readonly LLMProvider[];
   detailShadow?: DictionaryDetailShadowHook;
   lazyPrimary?: LazyPrimaryOptions;
+  webDistPath?: string | null;
 }
 
 class HttpError extends Error {
@@ -807,12 +809,24 @@ export async function createApiServer(database: PrismaClient, options: ApiServer
     }
   });
 
+  const webDistPath = options.webDistPath === undefined ? config.webDistDir : options.webDistPath;
+  if (webDistPath) {
+    await app.register(fastifyStatic, {
+      root: webDistPath,
+      prefix: '/',
+      index: ['index.html'],
+    });
+  }
+
   await app.ready();
   return app;
 }
 
 function startWorkerProcess(jobId: string): void {
-  const child = spawn(process.execPath, ['--import', 'tsx', 'src/worker.ts', jobId], {
+  const workerArguments = process.env.NODE_ENV === 'production'
+    ? ['dist/worker.js', jobId]
+    : ['--import', 'tsx', 'src/worker.ts', jobId];
+  const child = spawn(process.execPath, workerArguments, {
     cwd: process.cwd(), env: process.env, detached: true, stdio: 'ignore',
   });
   child.unref();

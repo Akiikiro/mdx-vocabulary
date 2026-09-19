@@ -1,0 +1,44 @@
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-mdx_vocabulary}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-mdx_vocabulary}
+      POSTGRES_DB: ${POSTGRES_DB:-mdx_vocabulary}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  app:
+    build:
+      context: .
+      target: runtime
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-mdx_vocabulary}:${POSTGRES_PASSWORD:-mdx_vocabulary}@db:5432/${POSTGRES_DB:-mdx_vocabulary}?schema=public
+      APP_DATA_DIR: /app/data
+      WEB_DIST_DIR: /app/web-dist
+      HOST: 0.0.0.0
+      PORT: 3000
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11435}
+      OLLAMA_REQUEST_TIMEOUT_MS: ${OLLAMA_REQUEST_TIMEOUT_MS:-15000}
+      OLLAMA_COLD_START_TIMEOUT_MS: ${OLLAMA_COLD_START_TIMEOUT_MS:-180000}
+      OLLAMA_GENERATION_TIMEOUT_MS: ${OLLAMA_GENERATION_TIMEOUT_MS:-60000}
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    ports:
+      - "${APP_PORT:-3000}:3000"
+    volumes:
+      - app-data:/app/data
+
+volumes:
+  postgres-data:
+  app-data:
