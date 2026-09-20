@@ -3,6 +3,10 @@
 FROM node:22-bookworm-slim AS backend-build
 WORKDIR /app
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends openssl \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY package.json package-lock.json ./
 # msedge-tts declares a pnpm-only preinstall guard. The application uses npm,
 # and none of the backend runtime dependencies require lifecycle scripts here.
