@@ -2,7 +2,7 @@
 
 `mdx-vocabulary` 是一个把 MDX 词典导入 PostgreSQL，并在浏览器中搜索、阅读和收藏词条的本地优先全栈应用。
 
-项目目前面向本地开发和功能验证：后端使用 TypeScript、Prisma、PostgreSQL 和 Fastify，前端是独立的 Vite + React 应用。MDX 原始内容会在导入阶段生成可搜索的纯文本和经过清洗的 HTML；公开 API 不返回原始 `entryRaw`。
+后端使用 TypeScript、Prisma、PostgreSQL 和 Fastify，前端使用 Vite + React。开发环境由 Vite proxy 连接 Fastify；production Docker 镜像则由 Fastify 同源提供构建后的 Vite 静态资源和 API。MDX 原始内容会在导入阶段生成可搜索的纯文本和经过清洗的 HTML；公开 API 不返回原始 `entryRaw`。
 
 ## 已实现功能
 
@@ -22,7 +22,9 @@
 - Dictionary 可声明可选 stylesheet URL；Oxford 8 使用随 Web 应用发布的 `O8C.css`，恢复 sanitized HTML 中保留 class 所支持的词典样式。前端通过安全的 MDict marker 显示 MDD 图片和发音控件，并在当前 dictionary 内解析内部词条引用。
 - Package 中唯一的 CSS 会自动绑定并由 Fastify dictionary asset route 提供；已知 stylesheet 通过内容 fingerprint 获得 rendering compatibility profile，使重复导入保持相同 override。MDD 资源按 dictionary 保存并由 scoped resource API 按需读取。
 - 单用户本地 Vocabulary Book：收藏词条到 PostgreSQL、持久展示、重新打开完整词条和移除收藏。
-- Vocabulary Book 可勾选已收藏词条，动态选择已配置的 AI provider/model，实时显示生成中的英文正文，并在结构和词汇覆盖校验通过后显示完整中英双语复习段落。
+- Vocabulary Book 可勾选已收藏词条，通过外部 Ollama 动态发现并选择 model，以 JSON Schema structured output 生成内容；前端实时显示英文正文 draft，后端保留完整 validation 和最多一次 correction retry，通过后显示中英双语结果。
+- 对 validated AI paragraph 提供按需 Edge TTS 全文播放、暂停和停止；MP3 使用文本、voice、rate 等参数组成的 cache key 持久缓存，streaming draft 不会触发 TTS。
+- Multi-stage Docker production build 和 Docker Compose 部署：一个 Fastify app container 同时提供 Vite assets、REST API 和 Swagger，另一个 container 运行 PostgreSQL；Ollama 保持为外部服务。
 - Importer、查询服务、HTTP API 的单元及 PostgreSQL integration tests。
 
 ## 架构
@@ -41,6 +43,21 @@ MDX
 → Browser
 ```
 
+当前 production 链路：
+
+```text
+Browser
+→ Fastify app container
+  ├── /           → Vite production assets
+  ├── /api/*      → Fastify REST API
+  └── /docs/*     → Fastify Swagger
+       │
+       ├── PostgreSQL db container
+       └── external Ollama service
+```
+
+Docker Compose 只运行 `app` 和 `db`。当前实现不要求或提供 Nginx；production 也不运行 Vite dev server。
+
 主要边界如下：
 
 - Importer 负责导入编排、状态更新、批量持久化和内容预处理。
@@ -49,8 +66,8 @@ MDX
 - Dictionary 的可选 `stylesheetUrl` 元数据声明其浏览器 stylesheet；没有声明的词典继续使用应用基础样式。
 - `DictionaryQueryService` 只负责只读 entry 查询和一跳 redirect 解析。
 - `VocabularyService` 负责收藏的幂等添加、列表查询和移除，并返回不含原始 MDX HTML 的显式 DTO。
-- Fastify 负责 HTTP 路由、校验、错误响应和 OpenAPI，不托管前端静态文件。
-- React 只通过相对 `/api/...` 路径访问后端；开发时由 Vite 转发。
+- Fastify 负责 HTTP 路由、校验、错误响应和 OpenAPI；设置 `WEB_DIST_DIR` 时还会提供 Vite production assets。
+- React 只通过相对 `/api/...` 路径访问后端；开发时由 Vite 转发，production 中由同一个 Fastify origin 提供。
 
 ### 数据从 MDX 到浏览器
 
@@ -98,7 +115,7 @@ MDD resource foundation 按 dictionary scope 枚举 package 中的 MDD 分卷，
 | `src/mdx/` | Parser 接口以及基于 `js-mdict` 的实现。 |
 | `src/mdx/lazy-mdx-adapter.ts` | Hybrid POC：以 MDX checksum 和物理 record offsets 为边界构造 application-owned locator，并通过 bounded process-local parser lifecycle 精确 lazy fetch。 |
 | `src/mdx/mdx-locator-persistence.ts` | Prisma nullable locator columns 与 application-owned `MdxEntryLocator` 的严格转换和 partial-state 拒绝。 |
-| `src/resources/` | 逻辑 resource path 校验/MDD key 转换、dictionary-scoped 分卷查询及保守的 bytes content-type 检测。 |
+| `src/resources/` | 逻辑 resource path 校验、dictionary-scoped MDD 分卷查询、浏览器音频转换，以及带磁盘缓存和并发去重的 Edge TTS。 |
 | `src/storage/` | MDX 文件存储接口和本地目录实现。 |
 | `src/storage/dictionary-package-storage.ts` | Multipart staging、安全路径校验、dictionary package 原子存储和 CSS asset 定位。 |
 | `src/dictionary-stylesheets/` | Stylesheet fingerprint/profile 检测，以及已有 package metadata 的幂等 reconciliation。 |
@@ -108,11 +125,11 @@ MDD resource foundation 按 dictionary scope 枚举 package 中的 MDD 分卷，
 | `src/entries/dictionary-entry-reprocessing-service.ts` | 从 `entryRaw` 以稳定游标分批重建 sanitized HTML/plain text，并提供 dry-run、进度和失败摘要。 |
 | `src/query/dictionary-query-service.ts` | Exact、prefix、entry detail 查询和一跳 redirect 解析。 |
 | `src/vocabulary/vocabulary-service.ts` | VocabularyItem 添加、列表、去重和移除业务逻辑及公开 DTO。 |
-| `src/ai/` | Provider-neutral LLM contract、AI model discovery service 和 Ollama adapter；prompt 与 Vocabulary 业务逻辑不进入 provider 层。 |
+| `src/ai/` | Provider-neutral LLM contract、model discovery、Ollama structured/streaming adapter，以及 vocabulary generation prompt、validation 和 correction retry。 |
 | `src/query/lazy-dictionary-detail-poc-service.ts` | 非默认 Hybrid POC path；只读验证现有 entry UUID 到 MDX locator 的映射，并执行 lazy transform/sanitize，不注册公开 route。 |
 | `src/query/dictionary-detail-shadow-verifier.ts` | 默认关闭的 detail dual-read shadow；保持 stored DTO 响应不变，按确定性采样隔离执行 lazy parity 并输出不含 HTML/path 的结构化结果。 |
 | `src/query/lazy-detail-diagnostic-service.ts` | Dictionary-scoped、零写入、有限并发的 persisted-locator parity sampling 与 latency 汇总。 |
-| `src/http/server.ts` | Fastify 实例、REST routes、validation、error responses、Swagger。 |
+| `src/http/server.ts` | Fastify 实例、REST routes、validation、error responses、Swagger，以及可选的 Vite production asset hosting。 |
 | `src/api.ts` | Fastify 进程启动和优雅关闭入口。 |
 | `web/src/api.ts` | 浏览器端相对路径 API client 和 DTO 类型。 |
 | `web/src/App.tsx` | 字典加载、debounced autocomplete、候选选择和详情页面状态。 |
@@ -139,7 +156,7 @@ cd ..
 
 ## Docker production 运行
 
-仓库根目录的 multi-stage `Dockerfile` 会分别安装并编译后端、构建 Vite production assets，最终镜像只保留 production Node dependencies、编译后的 Fastify 服务、Prisma schema/migrations、`ffmpeg` 和 `web/dist`。production 不运行 Vite dev server；Fastify 从 `WEB_DIST_DIR` 同源提供静态文件，因此浏览器中的 `/api/...` 相对请求保持不变。
+仓库根目录的 multi-stage `Dockerfile` 会在与 runtime 相同的 Debian/OpenSSL 环境中生成 Prisma Client 并编译后端，同时独立构建 Vite production assets。最终镜像保留 production Node dependencies、编译后的 Fastify 服务、Prisma schema/migrations、`ffmpeg` 和复制到 `/app/web-dist` 的前端资源。production 不运行 Vite dev server；Fastify 从 `WEB_DIST_DIR` 同源提供静态文件，因此浏览器中的 `/api/...` 相对请求保持不变。
 
 启动应用和 PostgreSQL：
 
@@ -169,7 +186,7 @@ Ollama 不在 compose 中启动。默认 `OLLAMA_BASE_URL` 是 `http://host.dock
 OLLAMA_BASE_URL=http://192.168.1.50:11435 docker compose up --build -d
 ```
 
-Windows Ollama 必须监听可从局域网访问的地址，而不只是 `127.0.0.1`，Windows 防火墙也需要允许 Mac 访问对应 TCP 端口。可以先在 Mac 上用 `curl http://<windows-ip>:11435/api/tags` 验证，再启动 compose。容器通过 Docker Desktop 的出站网络直接访问该 Windows IP；`db` 则通过 compose service name `db:5432` 访问。
+Windows Ollama 必须监听可从局域网访问的地址，而不只是 `127.0.0.1`，Windows 防火墙也需要允许 Mac 访问对应 TCP 端口。可以先在 Mac 上用 `curl http://<windows-ip>:11435/api/tags` 验证，再启动 compose。app container 通过 Docker runtime 的出站网络访问该 Windows IP；`db` 则通过 Compose service name `db:5432` 访问。
 
 ## PostgreSQL 和 Prisma 准备
 
@@ -219,7 +236,7 @@ npm run db:generate
 npm run db:migrate
 ```
 
-`db:migrate` 当前使用 `prisma migrate dev`，适合本地开发；仓库尚未提供生产 migration/deployment 工作流。
+`db:migrate` 使用 `prisma migrate dev`，适合本地开发。Docker production app 启动时使用 `prisma migrate deploy` 应用仓库中已有的 migrations。
 
 ## 导入 MDX
 
@@ -249,7 +266,7 @@ npm run import-mdx -- /absolute/or/relative/dictionary.mdx --stylesheet-url /dic
 npm run worker
 ```
 
-当前 worker 在队列为空后退出，不是常驻服务。项目目前只有 CLI 导入，没有 HTTP upload API。
+当前 worker 在队列为空后退出，不是常驻服务。除了 CLI 导入，Web App 也通过 `/api/dictionaries/import` 上传 dictionary package，并通过 import-status API 轮询进度。
 
 ## 重处理已有 entries
 
@@ -413,7 +430,7 @@ cd web
 npm run build
 ```
 
-输出目录为 `web/dist/`。Fastify 当前不会托管此目录。
+输出目录为 `web/dist/`。本地开发通常由 Vite dev server 提供页面；设置 `WEB_DIST_DIR` 后 Fastify 会托管对应 production assets，Docker 镜像使用 `/app/web-dist`。
 
 ## Local Development / Service Control
 
@@ -469,6 +486,7 @@ mdx-vocabulary/
 ├── src/
 │   ├── cli/
 │   │   └── import-mdx.ts
+│   ├── ai/
 │   ├── entries/
 │   │   ├── html.ts
 │   │   └── normalize.ts
@@ -480,6 +498,7 @@ mdx-vocabulary/
 │   ├── mdx/
 │   ├── query/
 │   │   └── dictionary-query-service.ts
+│   ├── resources/
 │   ├── storage/
 │   ├── vocabulary/
 │   │   └── vocabulary-service.ts
@@ -504,36 +523,21 @@ mdx-vocabulary/
 │   ├── package.json
 │   └── vite.config.ts
 ├── .env.example
+├── .dockerignore
+├── Dockerfile
+├── docker-compose.yml
 ├── package.json
 ├── README.md
 └── tsconfig.json
 ```
 
-## 计划中的生产部署
-
-生产部署尚未实现，计划职责划分为：
-
-```text
-Browser
-→ Nginx
-  ├── /        → static Vite dist
-  ├── /api/*   → reverse proxy to Fastify
-  └── /docs/*  → reverse proxy to Fastify Swagger
-                 → PostgreSQL
-```
-
-Nginx 将托管 `web/dist`，并把 `/api` 和 `/docs` 转发给 Fastify。因为 React 始终使用相对 `/api/...`，开发时可以由 Vite proxy 处理，生产时可以无须修改前端代码而改由 Nginx 处理。
-
-仓库当前没有 Nginx 配置、Docker 文件或 deployment automation。
-
 ## 尚未实现
 
 - Authentication 和 authorization。
-- HTTP dictionary upload/import API 及导入管理 UI。
 - 常驻 worker 的进程管理、重试策略和 dead-letter 处理。
 - 搜索历史和分页 UI。
-- AI 功能。
-- 发音播放。
+- 多用户 Vocabulary Book、账号同步或跨设备同步。
+- AI provider authentication、远程云 LLM provider 和 provider 管理 UI；当前只接入配置好的外部 Ollama。
+- AI paragraph 的按句切分/逐句播放 UI、TTS audio streaming 和本地/离线 TTS provider；当前 Web App 已支持 validated paragraph 的按需全文 Edge TTS。
 - 独立、可重复创建的 PostgreSQL test database fixture。
-- Nginx、Docker 和正式 deployment 配置。
 - Production logging、metrics、rate limiting 和 API/docs access policy。

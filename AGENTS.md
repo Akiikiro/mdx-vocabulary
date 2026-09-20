@@ -15,15 +15,16 @@ MDX
 → Browser
 ```
 
-Future production deployment is expected to use:
+The current production deployment is:
 
 ```text
 Browser
-→ Nginx
+→ Fastify app container
   ├── /        → Vite dist
-  ├── /api/*   → Fastify
+  ├── /api/*   → Fastify REST API
   └── /docs/*  → Fastify Swagger
-→ PostgreSQL
+       ├── PostgreSQL container
+       └── external Ollama service
 ```
 ## 0. Execution and Approval Policy
 
@@ -162,9 +163,7 @@ fetch('/api/...')
 
 Do not hardcode the Fastify host or port in frontend source code.
 
-Development routing is handled by the Vite proxy.
-
-Future production routing is expected to be handled by Nginx.
+Development routing is handled by the Vite proxy. In the current production image, Fastify serves the Vite build and API from the same origin.
 
 Do not duplicate backend business logic in the frontend, especially redirect resolution or dictionary normalization behavior.
 
@@ -255,6 +254,8 @@ Update README when changes materially affect:
 Do not update README for trivial refactors, formatting-only changes, or small bug fixes that do not change how the project is understood or used.
 
 Do not describe planned functionality as already implemented.
+
+Whenever a change adds, removes, or materially changes a user-facing feature, public API, runtime dependency, or deployment path, update both the README implementation-status lists and the relevant architecture/setup section in the same change. Before finishing, verify those claims against the routes, UI, Docker configuration, and tests rather than copying an earlier plan.
 
 ## 9. Swagger / OpenAPI maintenance
 
