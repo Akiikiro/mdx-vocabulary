@@ -9,7 +9,7 @@ export interface Dictionary {
   stylesheetCompatibilityProfile: string | null;
 }
 
-export interface SearchEntry {
+export interface EntryIdentity {
   id: string;
   dictionaryId: string;
   headword: string;
@@ -17,17 +17,69 @@ export interface SearchEntry {
   plainText: string;
   redirectTarget: string | null;
   sourceOrdinal: number;
+  sourceRecordId: string | null;
 }
 
-export interface EntryDetail extends SearchEntry {
+export interface HtmlSearchEntry extends EntryIdentity {
+  contentModel: 'html';
+}
+
+export interface StructuredSearchEntry extends EntryIdentity {
+  contentModel: 'structured';
+  matchedForm: string | null;
+}
+
+export type SearchEntry = HtmlSearchEntry | StructuredSearchEntry;
+
+export interface HtmlEntryDetail extends EntryIdentity {
+  contentModel: 'html';
   sanitizedHtml: string;
 }
+
+export interface StructuredForm {
+  text: string;
+  language: string;
+  kind: string | null;
+  tags: string[];
+  priorityTags: string[];
+  restrictions: string[];
+  ordinal: number;
+}
+
+export interface StructuredDefinition {
+  text: string;
+  language: string;
+  source: string;
+  provenance: unknown;
+  ordinal: number;
+}
+
+export interface StructuredSense {
+  ordinal: number;
+  sourceSenseOrdinal: number | null;
+  partOfSpeech: string[];
+  domains: string[];
+  tags: string[];
+  notes: string | null;
+  definitions: StructuredDefinition[];
+}
+
+export interface StructuredEntryDetail extends EntryIdentity {
+  contentModel: 'structured';
+  forms: StructuredForm[];
+  entryDefinitions: StructuredDefinition[];
+  senses: StructuredSense[];
+}
+
+export type EntryDetail = HtmlEntryDetail | StructuredEntryDetail;
+
+export type VocabularyEntry = Omit<EntryIdentity, 'sourceRecordId'>;
 
 export interface VocabularyItem {
   id: string;
   entryId: string;
   createdAt: string;
-  entry: SearchEntry;
+  entry: VocabularyEntry;
 }
 
 export interface AIModel {

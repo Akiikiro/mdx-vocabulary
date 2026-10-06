@@ -13,13 +13,15 @@ import {
   streamVocabularyParagraph,
   type AIProviderModels,
   type Dictionary,
+  type EntryIdentity,
   type EntryDetail,
   type GeneratedVocabularyParagraph,
   type SearchEntry,
   type VocabularyItem,
 } from './api';
-import { dictionaryStylesheetUrls } from './dictionary-stylesheets';
-import { EntryContent } from './EntryContent';
+import { entryStylesheetUrls } from './dictionary-stylesheets';
+import { EntryRenderer } from './EntryRenderer';
+import { SearchResultContent } from './SearchResultContent';
 
 const AUTOCOMPLETE_DELAY_MS = 250;
 const AUTOCOMPLETE_CANDIDATE_LIMIT = 30;
@@ -73,7 +75,7 @@ export function App() {
     (dictionary) => dictionary.id === styledDictionaryId,
   )?.stylesheetCompatibilityProfile ?? null;
 
-  useDictionaryStylesheet(dictionaryStylesheetUrl, dictionaryStylesheetCompatibilityProfile);
+  useDictionaryStylesheet(detail?.contentModel ?? null, dictionaryStylesheetUrl, dictionaryStylesheetCompatibilityProfile);
 
   useEffect(() => () => {
     generationController.current?.abort();
@@ -189,7 +191,7 @@ export function App() {
   }, []);
 
   async function selectEntry(
-    entry: SearchEntry,
+    entry: Pick<EntryIdentity, 'id' | 'dictionaryId' | 'headword'>,
     options: { preserveDetailOnFailure?: boolean; reportError?: boolean } = {},
   ): Promise<boolean> {
     autocompleteController.current?.abort();
@@ -588,8 +590,7 @@ export function App() {
                       onMouseEnter={() => setActiveIndex(index)}
                       onClick={() => void selectEntry(entry)}
                     >
-                      <span className="suggestion-headword">{entry.headword}</span>
-                      <span className="suggestion-preview">{entry.plainText || 'No text preview available.'}</span>
+                      <SearchResultContent entry={entry} />
                     </button>
                   ))}
                 </div>
@@ -628,10 +629,8 @@ export function App() {
               </div>
             </div>
             {detail.redirectTarget && <p className="redirect-detail">Redirected from this entry to {detail.redirectTarget}</p>}
-            <EntryContent
-              dictionaryId={detail.dictionaryId}
-              headword={detail.headword}
-              sanitizedHtml={detail.sanitizedHtml}
+            <EntryRenderer
+              detail={detail}
               expanded={detailExpanded}
               onNavigateEntryReference={navigateEntryReference}
             />
@@ -759,10 +758,14 @@ export function App() {
   );
 }
 
-function useDictionaryStylesheet(stylesheetUrl: string | null, compatibilityProfile: string | null) {
+function useDictionaryStylesheet(
+  contentModel: 'html' | 'structured' | null,
+  stylesheetUrl: string | null,
+  compatibilityProfile: string | null,
+) {
   useEffect(() => {
     document.querySelectorAll('link[data-dictionary-stylesheet]').forEach((stylesheet) => stylesheet.remove());
-    const stylesheets = dictionaryStylesheetUrls(stylesheetUrl, compatibilityProfile).map((url) => {
+    const stylesheets = entryStylesheetUrls(contentModel, stylesheetUrl, compatibilityProfile).map((url) => {
       const stylesheet = document.createElement('link');
       stylesheet.rel = 'stylesheet';
       stylesheet.dataset.dictionaryStylesheet = '';
@@ -771,7 +774,7 @@ function useDictionaryStylesheet(stylesheetUrl: string | null, compatibilityProf
       return stylesheet;
     });
     return () => stylesheets.forEach((stylesheet) => stylesheet.remove());
-  }, [stylesheetUrl, compatibilityProfile]);
+  }, [contentModel, stylesheetUrl, compatibilityProfile]);
 }
 
 function formatAddedTime(value: string): string {
@@ -783,6 +786,7 @@ function isAbortError(reason: unknown): boolean {
 }
 
 function prepareSuggestions(entries: SearchEntry[]): SearchEntry[] {
+  if (entries[0]?.contentModel === 'structured') return entries.slice(0, AUTOCOMPLETE_DISPLAY_LIMIT);
   const seenHeadwords = new Set<string>();
   const uniqueSuggestions = entries.filter((entry) => {
     if (/\bsb\b/i.test(entry.headword) || seenHeadwords.has(entry.headword)) return false;

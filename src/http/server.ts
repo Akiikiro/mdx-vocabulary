@@ -113,21 +113,80 @@ const dictionarySchema = {
     stylesheetCompatibilityProfile: { type: 'string', nullable: true },
   },
 } as const;
-const searchEntrySchema = {
+const entryIdentityProperties = {
+  id: { type: 'string', format: 'uuid' }, dictionaryId: { type: 'string', format: 'uuid' },
+  headword: { type: 'string' },
+  kind: { type: 'string', enum: ['definition', 'redirect', 'unknown'] },
+  plainText: { type: 'string' }, redirectTarget: { type: 'string', nullable: true },
+  sourceOrdinal: { type: 'integer' }, sourceRecordId: { type: 'string', nullable: true },
+} as const;
+const entryIdentityRequired = ['id', 'dictionaryId', 'headword', 'kind', 'plainText', 'redirectTarget', 'sourceOrdinal', 'sourceRecordId'] as const;
+const htmlSearchEntrySchema = {
+  type: 'object',
+  required: [...entryIdentityRequired, 'contentModel'],
+  properties: {
+    ...entryIdentityProperties,
+    contentModel: { type: 'string', const: 'html' },
+  },
+} as const;
+const structuredSearchEntrySchema = {
+  type: 'object',
+  required: [...entryIdentityRequired, 'contentModel', 'matchedForm'],
+  properties: {
+    ...entryIdentityProperties,
+    contentModel: { type: 'string', const: 'structured' },
+    matchedForm: { type: 'string', nullable: true },
+  },
+} as const;
+const searchEntrySchema = { oneOf: [htmlSearchEntrySchema, structuredSearchEntrySchema] } as const;
+const definitionSchema = {
+  type: 'object', required: ['text', 'language', 'source', 'provenance', 'ordinal'],
+  properties: {
+    text: { type: 'string' }, language: { type: 'string' }, source: { type: 'string' },
+    provenance: {}, ordinal: { type: 'integer' },
+  },
+} as const;
+const htmlDetailEntrySchema = {
+  ...htmlSearchEntrySchema,
+  required: [...htmlSearchEntrySchema.required, 'sanitizedHtml'],
+  properties: { ...htmlSearchEntrySchema.properties, sanitizedHtml: { type: 'string' } },
+} as const;
+const structuredDetailEntrySchema = {
+  type: 'object',
+  required: [...entryIdentityRequired, 'contentModel', 'forms', 'entryDefinitions', 'senses'],
+  properties: {
+    ...entryIdentityProperties,
+    contentModel: { type: 'string', const: 'structured' },
+    forms: { type: 'array', items: {
+      type: 'object', required: ['text', 'language', 'kind', 'tags', 'priorityTags', 'restrictions', 'ordinal'],
+      properties: {
+        text: { type: 'string' }, language: { type: 'string' }, kind: { type: 'string', nullable: true },
+        tags: { type: 'array', items: { type: 'string' } }, priorityTags: { type: 'array', items: { type: 'string' } },
+        restrictions: { type: 'array', items: { type: 'string' } }, ordinal: { type: 'integer' },
+      },
+    } },
+    entryDefinitions: { type: 'array', items: definitionSchema },
+    senses: { type: 'array', items: {
+      type: 'object', required: ['ordinal', 'sourceSenseOrdinal', 'partOfSpeech', 'domains', 'tags', 'notes', 'definitions'],
+      properties: {
+        ordinal: { type: 'integer' }, sourceSenseOrdinal: { type: 'integer', nullable: true },
+        partOfSpeech: { type: 'array', items: { type: 'string' } }, domains: { type: 'array', items: { type: 'string' } },
+        tags: { type: 'array', items: { type: 'string' } }, notes: { type: 'string', nullable: true },
+        definitions: { type: 'array', items: definitionSchema },
+      },
+    } },
+  },
+} as const;
+const detailEntrySchema = { oneOf: [htmlDetailEntrySchema, structuredDetailEntrySchema] } as const;
+const vocabularyEntrySchema = {
   type: 'object',
   required: ['id', 'dictionaryId', 'headword', 'kind', 'plainText', 'redirectTarget', 'sourceOrdinal'],
   properties: {
-    id: { type: 'string', format: 'uuid' }, dictionaryId: { type: 'string', format: 'uuid' },
-    headword: { type: 'string' },
-    kind: { type: 'string', enum: ['definition', 'redirect', 'unknown'] },
-    plainText: { type: 'string' }, redirectTarget: { type: 'string', nullable: true },
-    sourceOrdinal: { type: 'integer' },
+    id: entryIdentityProperties.id, dictionaryId: entryIdentityProperties.dictionaryId,
+    headword: entryIdentityProperties.headword, kind: entryIdentityProperties.kind,
+    plainText: entryIdentityProperties.plainText, redirectTarget: entryIdentityProperties.redirectTarget,
+    sourceOrdinal: entryIdentityProperties.sourceOrdinal,
   },
-} as const;
-const detailEntrySchema = {
-  ...searchEntrySchema,
-  required: [...searchEntrySchema.required, 'sanitizedHtml'],
-  properties: { ...searchEntrySchema.properties, sanitizedHtml: { type: 'string' } },
 } as const;
 const vocabularyItemSchema = {
   type: 'object',
@@ -136,7 +195,7 @@ const vocabularyItemSchema = {
     id: { type: 'string', format: 'uuid' },
     entryId: { type: 'string', format: 'uuid' },
     createdAt: { type: 'string', format: 'date-time' },
-    entry: searchEntrySchema,
+    entry: vocabularyEntrySchema,
   },
 } as const;
 const dictionaryPackageUploadSchema = {

@@ -6,10 +6,12 @@
   "scripts": {
     "api": "tsx src/api.ts",
     "build:server": "tsc -p tsconfig.build.json",
+    "test:web": "vitest run --root web --config vitest.frontend.config.ts",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "worker": "tsx src/worker.ts",
     "import-mdx": "tsx src/cli/import-mdx.ts",
+    "import-tomoshi": "tsx src/cli/import-tomoshi.ts",
     "reprocess-entries": "tsx src/cli/reprocess-entries.ts",
     "backfill-mdx-locators": "tsx src/cli/backfill-mdx-locators.ts",
     "verify-lazy-detail": "tsx src/cli/verify-lazy-detail.ts",

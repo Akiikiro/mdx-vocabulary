@@ -1,4 +1,4 @@
-import type { EntryKind, Prisma, PrismaClient } from '@prisma/client';
+import type { ContentModel, EntryKind, Prisma, PrismaClient } from '@prisma/client';
 import { normalizeHeadword } from './normalize.js';
 import type { LazyMdxAdapter, MdxEntryLocator } from '../mdx/lazy-mdx-adapter.js';
 import { mdxLocatorFromPersistedFields, persistedFieldsFromMdxLocator } from '../mdx/mdx-locator-persistence.js';
@@ -18,7 +18,7 @@ const locatorSelect = {
 
 type Row = {
   id: string; sourceOrdinal: number; headwordOriginal: string; headwordNormalized: string;
-  entryKind: EntryKind; redirectTargetOriginal: string | null; entryRaw: string;
+  entryKind: EntryKind; redirectTargetOriginal: string | null; entryRaw: string | null;
   mdxLocatorVersion: number | null; mdxLocatorFileChecksum: string | null; mdxLocatorKeyText: string | null;
   mdxLocatorKeyBlockIndex: number | null; mdxLocatorRecordStartOffset: bigint | null; mdxLocatorRecordEndOffset: bigint | null;
 };
@@ -29,8 +29,9 @@ export class MdxLocatorBackfillService {
   async backfill(dictionaryId: string, options: LocatorBackfillOptions = {}): Promise<LocatorBackfillSummary> {
     const batchSize = options.batchSize ?? 500;
     if (!Number.isInteger(batchSize) || batchSize < 1 || batchSize > 5000) throw new RangeError('batchSize must be between 1 and 5000');
-    const dictionary = await this.database.dictionary.findUnique({ where: { id: dictionaryId }, select: { id: true, name: true, storageKey: true, fileChecksum: true } });
+    const dictionary = await this.database.dictionary.findUnique({ where: { id: dictionaryId }, select: { id: true, name: true, storageKey: true, fileChecksum: true, sourceFormat: true, contentModel: true } });
     if (!dictionary) throw new DictionaryNotFoundForLocatorBackfillError(`Dictionary ${dictionaryId} was not found`);
+    requireMdxHtmlDictionary(dictionary);
     const started = performance.now();
     const path = this.pathForStorageKey(dictionary.storageKey);
     const locators = await this.mdx.listEntryLocators(path, dictionary.fileChecksum);
@@ -79,8 +80,15 @@ async function validateMapping(mdx: LazyMdxAdapter, path: string, checksum: stri
   if (locator.fileChecksum !== checksum) throw new Error('Locator checksum does not match Dictionary.fileChecksum');
   if (locator.keyText !== row.headwordOriginal || normalizeHeadword(locator.keyText) !== row.headwordNormalized) throw new Error('MDX headword identity mismatch');
   const fetched = await mdx.fetchByLocator(path, checksum, locator);
+  if (row.entryRaw === null) throw new Error('MDX dictionary entry is missing raw content');
   if (fetched.headword !== row.headwordOriginal || fetched.rawEntry !== row.entryRaw) throw new Error('MDX record content mismatch');
   if ((fetched.redirectTarget ? 'redirect' : 'definition') !== row.entryKind || fetched.redirectTarget !== row.redirectTargetOriginal) throw new Error('MDX redirect or entry kind mismatch');
+}
+
+function requireMdxHtmlDictionary(dictionary: { sourceFormat: string; contentModel: ContentModel }): void {
+  if (dictionary.sourceFormat !== 'mdx' || dictionary.contentModel !== 'html') {
+    throw new Error('MDX locator backfill requires an MDX dictionary with HTML content');
+  }
 }
 
 function sameLocator(left: MdxEntryLocator, right: MdxEntryLocator): boolean { return serializeCollisionKey(left) === serializeCollisionKey(right); }

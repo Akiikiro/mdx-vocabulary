@@ -1,10 +1,10 @@
 import crypto from 'node:crypto';
-import type { EntryKind, PrismaClient } from '@prisma/client';
+import type { ContentModel, EntryKind, PrismaClient } from '@prisma/client';
 import { entryPlainText, sanitizeEntryHtml } from '../entries/html.js';
 import { normalizeHeadword } from '../entries/normalize.js';
 import { InvalidMdxLocatorError, MdxEntryNotFoundByLocatorError, MdxFileIdentityMismatchError } from '../mdx/lazy-mdx-adapter.js';
 import { PartialPersistedMdxLocatorError } from '../mdx/mdx-locator-persistence.js';
-import type { DictionaryDetailShadowHook, EntryDetailDTO } from './dictionary-query-service.js';
+import type { DictionaryDetailShadowHook, HtmlEntryDetailDTO } from './dictionary-query-service.js';
 import { LazyDetailMappingError, LazyDetailPipelineError, type LazyDictionaryDetailPocService } from './lazy-dictionary-detail-poc-service.js';
 
 export type ShadowFailureCategory = 'missing_locator' | 'checksum_mismatch' | 'malformed_locator' | 'mdx_read' | 'sanitizer' | 'identity_mismatch' | 'html_mismatch' | 'plain_text_mismatch' | 'redirect_mismatch' | 'unknown';
@@ -41,13 +41,13 @@ export class DictionaryDetailShadowVerifier implements DictionaryDetailShadowHoo
 
   shouldVerify(entryId: string): boolean { return this.active < this.maxConcurrent && isDeterministicallySampled(entryId, this.sampleRate, this.seed); }
 
-  async verify(storedDetail: EntryDetailDTO, storedDurationMs: number): Promise<DetailShadowResult> {
+  async verify(storedDetail: HtmlEntryDetailDTO, storedDurationMs: number): Promise<DetailShadowResult> {
     this.active++;
     try { return await this.verifyNow(storedDetail, storedDurationMs); }
     finally { this.active--; }
   }
 
-  async verifyNow(storedDetail: EntryDetailDTO, storedDurationMs: number): Promise<DetailShadowResult> {
+  async verifyNow(storedDetail: HtmlEntryDetailDTO, storedDurationMs: number): Promise<DetailShadowResult> {
     const started = performance.now();
     try {
       const baseline = await this.loadBaseline(storedDetail.id);
@@ -79,12 +79,13 @@ export class DictionaryDetailShadowVerifier implements DictionaryDetailShadowHoo
   private emit(result: DetailShadowResult): DetailShadowResult { this.observe(result); return result; }
 
   private async loadBaseline(entryId: string): Promise<{ sanitizedHtml: string; plainText: string; redirectTarget: string | null; resolvedRedirectEntryId: string | null } | null> {
-    const row = await this.database.dictionaryEntry.findUnique({ where: { id: entryId }, select: { dictionaryId: true, entryRaw: true, entryKind: true, redirectTargetOriginal: true } });
+    const row = await this.database.dictionaryEntry.findUnique({ where: { id: entryId }, select: { dictionaryId: true, entryRaw: true, entryKind: true, redirectTargetOriginal: true, dictionary: { select: { sourceFormat: true, contentModel: true } } } });
     if (!row) return null;
-    let raw = row.entryRaw; let resolvedRedirectEntryId: string | null = null;
+    requireMdxHtmlDictionary(row.dictionary);
+    let raw = requireMdxRaw(row.entryRaw); let resolvedRedirectEntryId: string | null = null;
     if (row.entryKind === 'redirect' && row.redirectTargetOriginal) {
       const target = await this.database.dictionaryEntry.findFirst({ where: { dictionaryId: row.dictionaryId, headwordNormalized: normalizeHeadword(row.redirectTargetOriginal) }, orderBy: { sourceOrdinal: 'asc' }, select: { id: true, entryRaw: true, entryKind: true } });
-      raw = target?.entryKind === 'definition' ? target.entryRaw : '';
+      raw = target?.entryKind === 'definition' ? requireMdxRaw(target.entryRaw) : '';
       resolvedRedirectEntryId = target?.id ?? null;
     }
     try {
@@ -92,6 +93,17 @@ export class DictionaryDetailShadowVerifier implements DictionaryDetailShadowHoo
       return { sanitizedHtml, plainText: sanitizedHtml ? entryPlainText(sanitizedHtml) : '', redirectTarget: row.redirectTargetOriginal, resolvedRedirectEntryId };
     } catch (error) { throw new ShadowSanitizerError(error); }
   }
+}
+
+function requireMdxHtmlDictionary(dictionary: { sourceFormat: string; contentModel: ContentModel }): void {
+  if (dictionary.sourceFormat !== 'mdx' || dictionary.contentModel !== 'html') {
+    throw new LazyDetailMappingError('Dictionary detail shadow verification requires an MDX dictionary with HTML content');
+  }
+}
+
+function requireMdxRaw(entryRaw: string | null): string {
+  if (entryRaw === null) throw new LazyDetailMappingError('MDX dictionary entry is missing raw content');
+  return entryRaw;
 }
 
 class ShadowSanitizerError extends Error { constructor(readonly cause: unknown) { super('Shadow content pipeline failed'); } }

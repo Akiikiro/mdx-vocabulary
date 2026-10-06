@@ -7,6 +7,12 @@ import { deterministicSample, LazyDetailDiagnosticService } from '../src/query/l
 import { LazyDictionaryDetailPocService } from '../src/query/lazy-dictionary-detail-poc-service.js';
 import type { LazyMdxAdapter, MdxEntryLocator } from '../src/mdx/lazy-mdx-adapter.js';
 import { persistedFieldsFromMdxLocator } from '../src/mdx/mdx-locator-persistence.js';
+import type { EntryDetailDTO, HtmlEntryDetailDTO } from '../src/query/dictionary-query-service.js';
+
+function requireHtml(detail: EntryDetailDTO | null): HtmlEntryDetailDTO {
+  if (detail?.contentModel !== 'html') throw new Error('Expected HTML detail');
+  return detail;
+}
 
 const checksum = '9'.repeat(64);
 const keys = ['same', 'same', '東京', 'redirect', 'target'];
@@ -32,7 +38,7 @@ describe('opt-in dictionary detail shadow verification', () => {
 
   it('is disabled by default and has deterministic, safe sampling', async () => {
     let called = false; const hook = { shouldVerify: () => false, verify: async () => { called = true; } };
-    expect((await new DictionaryQueryService(db, hook).getEntry(ids[0]))?.sanitizedHtml).toBe('stored-0');
+    expect(requireHtml(await new DictionaryQueryService(db, hook).getEntry(ids[0])).sanitizedHtml).toBe('stored-0');
     expect(called).toBe(false);
     expect(parseShadowSampleRate(undefined)).toBe(0); expect(parseShadowSampleRate('bad')).toBe(0); expect(parseShadowSampleRate('101')).toBe(0);
     expect(isDeterministicallySampled(ids[0], 0, 's')).toBe(false); expect(isDeterministicallySampled(ids[0], 100, 's')).toBe(true);
@@ -45,7 +51,7 @@ describe('opt-in dictionary detail shadow verification', () => {
       let resolve!: (value: DetailShadowResult) => void; const observed = new Promise<DetailShadowResult>((r) => { resolve = r; });
       const shadow = new DictionaryDetailShadowVerifier(db, lazy(), 100, 'test', resolve);
       const stored = await new DictionaryQueryService(db, shadow).getEntry(id);
-      expect(stored?.sanitizedHtml).toMatch(/^stored-/u);
+      expect(requireHtml(stored).sanitizedHtml).toMatch(/^stored-/u);
       const result = await observed; expect(result).toEqual(expect.objectContaining({ status: 'success', parity: true, failureCategory: null }));
       expect(JSON.stringify(result)).not.toContain('/hidden/'); expect(JSON.stringify(result)).not.toContain(raw[2]);
     }
@@ -53,9 +59,9 @@ describe('opt-in dictionary detail shadow verification', () => {
 
   it('classifies parity, missing locator, and checksum failures without breaking stored reads', async () => {
     const observeOnce = async (id: string) => { let resolve!: (value: DetailShadowResult) => void; const observed = new Promise<DetailShadowResult>((r) => { resolve = r; }); const detail = await new DictionaryQueryService(db, new DictionaryDetailShadowVerifier(db, lazy(), 100, 'x', resolve)).getEntry(id); return { detail, result: await observed }; };
-    overrideRaw = '<u>different</u>'; let checked = await observeOnce(ids[0]); expect(checked.detail?.sanitizedHtml).toBe('stored-0'); expect(checked.result).toEqual(expect.objectContaining({ status: 'mismatch', htmlMismatch: true })); overrideRaw = null;
+    overrideRaw = '<u>different</u>'; let checked = await observeOnce(ids[0]); expect(requireHtml(checked.detail).sanitizedHtml).toBe('stored-0'); expect(checked.result).toEqual(expect.objectContaining({ status: 'mismatch', htmlMismatch: true })); overrideRaw = null;
     await db.dictionaryEntry.update({ where: { id: ids[0] }, data: { mdxLocatorVersion: null, mdxLocatorFileChecksum: null, mdxLocatorKeyText: null, mdxLocatorKeyBlockIndex: null, mdxLocatorRecordStartOffset: null, mdxLocatorRecordEndOffset: null } });
-    checked = await observeOnce(ids[0]); expect(checked.detail?.sanitizedHtml).toBe('stored-0'); expect(checked.result.failureCategory).toBe('missing_locator');
+    checked = await observeOnce(ids[0]); expect(requireHtml(checked.detail).sanitizedHtml).toBe('stored-0'); expect(checked.result.failureCategory).toBe('missing_locator');
     await db.dictionaryEntry.update({ where: { id: ids[0] }, data: { ...persistedFieldsFromMdxLocator(locators[0]), mdxLocatorFileChecksum: '8'.repeat(64) } });
     checked = await observeOnce(ids[0]); expect(checked.result.failureCategory).toBe('checksum_mismatch');
     await db.dictionaryEntry.update({ where: { id: ids[0] }, data: persistedFieldsFromMdxLocator(locators[0]) });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { dictionaryStylesheetUrls } from '../web/src/dictionary-stylesheets.js';
+import { dictionaryStylesheetUrls, entryStylesheetUrls } from '../web/src/dictionary-stylesheets.js';
 
 describe('dictionary stylesheet compatibility', () => {
   it('loads the Oxford override after any stylesheet URL carrying the Oxford profile', () => {
@@ -14,5 +14,11 @@ describe('dictionary stylesheet compatibility', () => {
       .toEqual(['/api/dictionaries/example/assets/styles/theme.css']);
     expect(dictionaryStylesheetUrls('/api/dictionaries/example/assets/styles/theme.css', 'unknown'))
       .toEqual(['/api/dictionaries/example/assets/styles/theme.css']);
+  });
+
+  it('never mounts an MDX stylesheet for structured detail', () => {
+    expect(entryStylesheetUrls('structured', '/api/dictionaries/example/assets/styles/theme.css', 'oxford8')).toEqual([]);
+    expect(entryStylesheetUrls('html', '/api/dictionaries/example/assets/styles/theme.css', 'oxford8'))
+      .toEqual(['/api/dictionaries/example/assets/styles/theme.css', '/dictionaries/oxford8/overrides.css']);
   });
 });

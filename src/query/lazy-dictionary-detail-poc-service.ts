@@ -1,12 +1,12 @@
-import type { EntryKind, PrismaClient } from '@prisma/client';
+import type { ContentModel, EntryKind, PrismaClient } from '@prisma/client';
 import { entryPlainText, sanitizeEntryHtml } from '../entries/html.js';
 import { normalizeHeadword } from '../entries/normalize.js';
 import { serializeMdxLocator, type LazyMdxAdapter, type MdxEntryLocator } from '../mdx/lazy-mdx-adapter.js';
 import { mdxLocatorFromPersistedFields } from '../mdx/mdx-locator-persistence.js';
-import type { EntryDetailDTO } from './dictionary-query-service.js';
+import type { HtmlEntryDetailDTO } from './dictionary-query-service.js';
 
 export interface LazyDetailPocResult {
-  detail: EntryDetailDTO;
+  detail: HtmlEntryDetailDTO;
   locator: MdxEntryLocator;
   resolvedRedirectEntryId: string | null;
   parserWasCold: boolean | null;
@@ -38,7 +38,7 @@ interface MappingAuditRow {
   headwordNormalized: string;
   entryKind: EntryKind;
   redirectTargetOriginal: string | null;
-  entryRaw: string;
+  entryRaw: string | null;
 }
 
 export class LazyDictionaryDetailPocService {
@@ -57,25 +57,27 @@ export class LazyDictionaryDetailPocService {
   }
 
   async warmupDictionary(dictionaryId: string): Promise<{ entries: number; durationMs: number }> {
-    const dictionary = await this.database.dictionary.findUnique({ where: { id: dictionaryId }, select: { storageKey: true, fileChecksum: true } });
+    const dictionary = await this.database.dictionary.findUnique({ where: { id: dictionaryId }, select: { storageKey: true, fileChecksum: true, sourceFormat: true, contentModel: true } });
     if (!dictionary) throw new LazyDetailMappingError('Dictionary not found');
+    requireMdxHtmlDictionary(dictionary);
     const started = performance.now();
     const entries = (await this.mdx.listEntryLocators(this.pathForStorageKey(dictionary.storageKey), dictionary.fileChecksum)).length;
     return { entries, durationMs: performance.now() - started };
   }
 
   async comparePersistedLocatorParity(entryId: string): Promise<LazyDetailParityResult | null> {
-    const row = await this.database.dictionaryEntry.findUnique({ where: { id: entryId }, select: { dictionaryId: true, entryRaw: true, entryKind: true, redirectTargetOriginal: true, headwordOriginal: true } });
+    const row = await this.database.dictionaryEntry.findUnique({ where: { id: entryId }, select: { dictionaryId: true, entryRaw: true, entryKind: true, redirectTargetOriginal: true, headwordOriginal: true, dictionary: { select: { sourceFormat: true, contentModel: true } } } });
     if (!row) return null;
+    requireMdxHtmlDictionary(row.dictionary);
     const lazy = await this.getEntryFromPersistedLocator(entryId);
     if (!lazy) return null;
-    let baselineRaw = row.entryRaw;
+    let baselineRaw = requireMdxRaw(row.entryRaw);
     if (row.entryKind === 'redirect' && row.redirectTargetOriginal) {
       const target = await this.database.dictionaryEntry.findFirst({
         where: { dictionaryId: row.dictionaryId, headwordNormalized: normalizeHeadword(row.redirectTargetOriginal) },
         orderBy: { sourceOrdinal: 'asc' }, select: { entryRaw: true, entryKind: true },
       });
-      baselineRaw = target?.entryKind === 'definition' ? target.entryRaw : '';
+      baselineRaw = target?.entryKind === 'definition' ? requireMdxRaw(target.entryRaw) : '';
     }
     const expectedHtml = baselineRaw ? sanitizeEntryHtml(baselineRaw) : '';
     const expectedPlain = expectedHtml ? entryPlainText(expectedHtml) : '';
@@ -88,13 +90,14 @@ export class LazyDictionaryDetailPocService {
       where: { id: entryId },
       select: {
         id: true, dictionaryId: true, headwordOriginal: true, headwordNormalized: true,
-        entryKind: true, redirectTargetOriginal: true, sourceOrdinal: true,
+        entryKind: true, redirectTargetOriginal: true, sourceOrdinal: true, sourceRecordId: true,
         mdxLocatorVersion: true, mdxLocatorFileChecksum: true, mdxLocatorKeyText: true,
         mdxLocatorKeyBlockIndex: true, mdxLocatorRecordStartOffset: true, mdxLocatorRecordEndOffset: true,
-        dictionary: { select: { storageKey: true, fileChecksum: true } },
+        dictionary: { select: { storageKey: true, fileChecksum: true, sourceFormat: true, contentModel: true } },
       },
     });
     if (!row) return null;
+    requireMdxHtmlDictionary(row.dictionary);
     const mdxPath = this.pathForStorageKey(row.dictionary.storageKey);
     const locator = locatorSource === 'persisted'
       ? requirePersistedLocator(mdxLocatorFromPersistedFields(row), row.dictionary.fileChecksum)
@@ -133,7 +136,7 @@ export class LazyDictionaryDetailPocService {
       detail: {
         id: row.id, dictionaryId: row.dictionaryId, headword: row.headwordOriginal,
         kind: row.entryKind, redirectTarget: row.redirectTargetOriginal,
-        sourceOrdinal: row.sourceOrdinal, sanitizedHtml, plainText,
+        sourceOrdinal: row.sourceOrdinal, sourceRecordId: row.sourceRecordId, contentModel: 'html', sanitizedHtml, plainText,
       },
       locator,
       resolvedRedirectEntryId,
@@ -144,9 +147,10 @@ export class LazyDictionaryDetailPocService {
 
   async auditMapping(dictionaryId: string, batchSize = 500): Promise<MdxMappingAudit> {
     const dictionary = await this.database.dictionary.findUnique({
-      where: { id: dictionaryId }, select: { id: true, storageKey: true, fileChecksum: true },
+      where: { id: dictionaryId }, select: { id: true, storageKey: true, fileChecksum: true, sourceFormat: true, contentModel: true },
     });
     if (!dictionary) throw new LazyDetailMappingError('Dictionary not found');
+    requireMdxHtmlDictionary(dictionary);
     const mdxPath = this.pathForStorageKey(dictionary.storageKey);
     const locators = await this.mdx.listEntryLocators(mdxPath, dictionary.fileChecksum);
     const result: MdxMappingAudit = {
@@ -182,6 +186,17 @@ export class LazyDictionaryDetailPocService {
     }
     return result;
   }
+}
+
+function requireMdxHtmlDictionary(dictionary: { sourceFormat: string; contentModel: ContentModel }): void {
+  if (dictionary.sourceFormat !== 'mdx' || dictionary.contentModel !== 'html') {
+    throw new LazyDetailMappingError('Lazy MDX detail operations require an MDX dictionary with HTML content');
+  }
+}
+
+function requireMdxRaw(entryRaw: string | null): string {
+  if (entryRaw === null) throw new LazyDetailMappingError('MDX dictionary entry is missing raw content');
+  return entryRaw;
 }
 
 function requirePersistedLocator(locator: MdxEntryLocator | null, checksum: string): MdxEntryLocator {

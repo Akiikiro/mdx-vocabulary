@@ -6,6 +6,7 @@
 
 ## 已实现功能
 
+- Tomoshi SQLite CLI 导入到通用 structured schema；后端和 React 按 `contentModel` 分派 HTML/structured 搜索结果与详情渲染。
 - 将本地 `.mdx` 文件复制到本地数据目录并计算 SHA-256 checksum。
 - 从浏览器选择并上传完整 MDict 文件夹；后端流式保存、验证 package，并复用 worker 导入其中唯一的 MDX。
 - 使用 PostgreSQL 保存 dictionary、entry 和 import job。
@@ -107,10 +108,12 @@ MDD resource foundation 按 dictionary scope 枚举 package 中的 MDD 分卷，
 | --- | --- |
 | `prisma/schema.prisma` | Dictionary、DictionaryEntry（包括 nullable、versioned MDX physical locator）、VocabularyItem、ImportJob schema、枚举和索引。 |
 | `src/cli/import-mdx.ts` | 本地 MDX 导入命令；保存文件、创建 job、启动指定 job worker、输出摘要。 |
+| `src/cli/import-tomoshi.ts` | 本地 Tomoshi SQLite structured import 命令和进度/摘要输出。 |
 | `src/cli/reprocess-entries.ts` | 对显式指定 dictionary 执行 marker-aware entry dry-run 或原地批量重处理。 |
 | `src/cli/backfill-mdx-locators.ts` | 对显式指定 dictionary 校验并 dry-run/apply 持久化 MDX locator；默认不写入。 |
 | `src/worker.ts` | Claim queued job 并调用 importer；队列为空后退出。 |
 | `src/importer/mdx-importer.ts` | 导入状态、批处理、内容转换和失败记录。 |
+| `src/importer/tomoshi-importer.ts` | Read-only SQLite source validation、streaming merge、canonical structured mapping、idempotent batch persistence 和失败记录。 |
 | `src/importer/dictionary-package-import-service.ts` | Package 分类验证、dictionary-owned layout 提交及 Dictionary/ImportJob 创建。 |
 | `src/mdx/` | Parser 接口以及基于 `js-mdict` 的实现。 |
 | `src/mdx/lazy-mdx-adapter.ts` | Hybrid POC：以 MDX checksum 和物理 record offsets 为边界构造 application-owned locator，并通过 bounded process-local parser lifecycle 精确 lazy fetch。 |
@@ -123,7 +126,7 @@ MDD resource foundation 按 dictionary scope 枚举 package 中的 MDD 分卷，
 | `src/entries/` | Headword normalization、sort key、redirect 检测、HTML sanitization、纯文本提取。 |
 | `src/entries/mdict-references.ts` | 校验 MDict sound、image/resource、internal-entry references 并生成 dictionary-independent inert markers，同时阻止 raw HTML 伪造 marker。 |
 | `src/entries/dictionary-entry-reprocessing-service.ts` | 从 `entryRaw` 以稳定游标分批重建 sanitized HTML/plain text，并提供 dry-run、进度和失败摘要。 |
-| `src/query/dictionary-query-service.ts` | Exact、prefix、entry detail 查询和一跳 redirect 解析。 |
+| `src/query/dictionary-query-service.ts` | 按 `contentModel` 分派 HTML/structured exact、prefix 和 detail 查询；HTML 保留一跳 redirect，structured 搜索在 canonical headword 与 forms 间排名并按 entry 去重。 |
 | `src/vocabulary/vocabulary-service.ts` | VocabularyItem 添加、列表、去重和移除业务逻辑及公开 DTO。 |
 | `src/ai/` | Provider-neutral LLM contract、model discovery、Ollama structured/streaming adapter，以及 vocabulary generation prompt、validation 和 correction retry。 |
 | `src/query/lazy-dictionary-detail-poc-service.ts` | 非默认 Hybrid POC path；只读验证现有 entry UUID 到 MDX locator 的映射，并执行 lazy transform/sanitize，不注册公开 route。 |
@@ -133,6 +136,8 @@ MDD resource foundation 按 dictionary scope 枚举 package 中的 MDD 分卷，
 | `src/api.ts` | Fastify 进程启动和优雅关闭入口。 |
 | `web/src/api.ts` | 浏览器端相对路径 API client 和 DTO 类型。 |
 | `web/src/App.tsx` | 字典加载、debounced autocomplete、候选选择和详情页面状态。 |
+| `web/src/EntryRenderer.tsx` | 按 detail `contentModel` 分派既有 HTML renderer 与通用 structured renderer。 |
+| `web/src/StructuredEntryRenderer.tsx` | 按 source order 展示 forms、entry-level definitions、sense metadata 和分语言 definitions。 |
 | `web/src/styles.css` | 无 UI framework 的页面及词条基础样式。 |
 
 ## 环境要求
@@ -285,6 +290,29 @@ npm run reprocess-entries -- <dictionaryId> --apply --batch-size=500
 
 处理以 `(dictionaryId, sourceOrdinal)` 稳定游标分页，每批使用短事务同时更新 `entrySanitizedHtml` 和 `entryPlainText`。它不会删除或重建 entry，因此 entry ID、source ordinal 和 vocabulary relations 保持不变；redirect 的 HTML/plain text 保持为空。该命令不会自动处理其他 dictionaries，也不会在 API 启动时运行。
 
+## Importing Tomoshi structured data
+
+The local CLI imports the Tomoshi open-data SQLite export:
+
+```bash
+npm run import-tomoshi -- /absolute/or/relative/tomoshi-dict-open.db
+```
+
+An optional display name can be supplied with `--name`. The importer opens SQLite read-only, validates the expected export tables, and streams source-ordered records into the generic `DictionaryEntry` / `StructuredEntry` / `Form` / `Sense` / definition tables. Re-running the same source checksum is idempotent and resumes complete transactional batches without changing entry identity.
+
+Use an immutable, decompressed export and Node.js with `node:sqlite` support (verified with Node 22.23.3). The CLI reads the supplied file in place; `storageKey` is a checksum-based logical source key, not a copied MDX asset. A different checksum creates a separate dictionary snapshot. Cross-snapshot updates are not implemented. Keep the original export if you need to retry an interrupted import.
+
+Tomoshi dictionaries are recorded with `sourceFormat = tomoshi`, `sourceLanguage = ja`, and `contentModel = structured`. Raw and sanitized HTML remain `NULL`. REST and frontend DTOs use a `contentModel` discriminator: HTML detail keeps the existing sanitized renderer, while structured detail renders forms, entry-level definitions and ordered senses without requiring `sanitizedHtml`.
+
+`freq_rank`, `vocab_jlpt`, entry/form commonness, variant notes, Chinese examples and localized Chinese sense notes are reported as omitted because the current generic schema has no non-lossy entry-metadata or localized-note/example destination. They are not folded into tags or definition provenance.
+
+```text
+Tomoshi SQLite
+→ TomoshiSourceAdapter / TomoshiImporter
+→ canonical structured dictionary tables
+→ PostgreSQL / Prisma
+```
+
 ## 持久化 MDX locators
 
 Hybrid locator backfill 将现有 entry 临时通过 `sourceOrdinal` 与不可变 MDX key list 对齐，并在验证 checksum、headword、raw definition、entry kind 和 redirect 后，仅填写 nullable locator columns。默认及 `--dry-run` 均执行零写入：
@@ -360,8 +388,8 @@ http://127.0.0.1:3000
 | GET | `/api/ai/models` | 返回已配置 AI providers 及动态发现的 models；响应使用应用自有稳定 DTO。 |
 | POST | `/api/ai/generate-paragraph` | 接受运行时 `{ provider, model, words }`，返回 `{ paragraph, translation, usedWords }`；无效生成最多纠正重试一次。 |
 | POST | `/api/ai/generate-paragraph/stream` | 接受相同请求并返回 NDJSON attempt、正文 delta 和最终 validated result；纠正重试前发送新的 attempt 以重置 draft。 |
-| GET | `/api/dictionaries/:dictionaryId/search` | 搜索指定 ready dictionary；支持 `q`、`mode`、`limit`、`offset`。 |
-| GET | `/api/entries/:entryId` | 获取 entry detail 和 sanitized HTML。 |
+| GET | `/api/dictionaries/:dictionaryId/search` | 搜索指定 ready dictionary；支持 `q`、`mode`、`limit`、`offset`。HTML 查询 canonical headword；structured 查询 canonical headword 和 forms，并返回最佳 `matchedForm`。 |
+| GET | `/api/entries/:entryId` | 获取以 `contentModel` 区分的 detail：HTML 返回 `sanitizedHtml`，structured 返回 forms、entry definitions 和带 definitions 的 senses。 |
 | GET | `/api/vocabulary` | 按添加时间倒序列出收藏及其安全 entry 摘要。 |
 | POST | `/api/vocabulary` | 使用 `{ "entryId": "..." }` 收藏词条；首次返回 201，重复收藏幂等返回同一记录和 200。 |
 | DELETE | `/api/vocabulary/:id` | 删除指定收藏，成功返回 204。 |
@@ -470,6 +498,12 @@ npx tsc --noEmit
 ```bash
 cd web
 npm run build
+```
+
+在根目录运行 focused frontend renderer tests（先安装根目录及 `web/` dependencies）：
+
+```bash
+npm run test:web
 ```
 
 注意：当前 PostgreSQL integration tests 不是完全隔离的 fixture。它们要求 `DATABASE_URL` 指向的数据库已经包含当前 Oxford 测试字典和特定词条，包括 `apple`、`abandon`、`a catch-22 situation`，并断言该字典有 92,667 个 entries。测试过程中还会短暂创建 dictionary/job fixture，并在结束时清理。不要让测试连接生产数据库。

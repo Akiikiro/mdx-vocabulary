@@ -1,4 +1,4 @@
-import type { EntryKind, PrismaClient } from '@prisma/client';
+import type { ContentModel, EntryKind, PrismaClient } from '@prisma/client';
 import { entryPlainText, sanitizeEntryHtml } from './html.js';
 
 export interface ReprocessedEntryContent {
@@ -47,8 +47,8 @@ interface ReprocessingRow {
   sourceOrdinal: number;
   headwordOriginal: string;
   entryKind: EntryKind;
-  entryRaw: string;
-  entrySanitizedHtml: string;
+  entryRaw: string | null;
+  entrySanitizedHtml: string | null;
   entryPlainText: string;
 }
 
@@ -70,9 +70,10 @@ export class DictionaryEntryReprocessingService {
       throw new RangeError('batchSize must be an integer between 1 and 5000');
     }
     const dictionary = await this.database.dictionary.findUnique({
-      where: { id: dictionaryId }, select: { id: true, name: true, packageStorageKey: true },
+      where: { id: dictionaryId }, select: { id: true, name: true, packageStorageKey: true, sourceFormat: true, contentModel: true },
     });
     if (!dictionary) throw new DictionaryNotFoundForReprocessingError(`Dictionary ${dictionaryId} was not found`);
+    requireMdxHtmlDictionary(dictionary);
 
     const total = await this.database.dictionaryEntry.count({ where: { dictionaryId } });
     const started = performance.now();
@@ -105,7 +106,7 @@ export class DictionaryEntryReprocessingService {
       for (const row of rows) {
         progress.processed += 1;
         try {
-          const content = this.processContent(row.entryRaw, row.entryKind);
+          const content = this.processContent(requireMdxRaw(row.entryRaw), row.entryKind);
           const htmlChanged = content.sanitizedHtml !== row.entrySanitizedHtml;
           const plainTextChanged = content.plainText !== row.entryPlainText;
           if (!htmlChanged && !plainTextChanged) {
@@ -150,6 +151,17 @@ export class DictionaryEntryReprocessingService {
       failures,
     };
   }
+}
+
+function requireMdxHtmlDictionary(dictionary: { sourceFormat: string; contentModel: ContentModel }): void {
+  if (dictionary.sourceFormat !== 'mdx' || dictionary.contentModel !== 'html') {
+    throw new Error('Entry content reprocessing requires an MDX dictionary with HTML content');
+  }
+}
+
+function requireMdxRaw(entryRaw: string | null): string {
+  if (entryRaw === null) throw new Error('MDX dictionary entry is missing raw content');
+  return entryRaw;
 }
 
 function recordFailure(

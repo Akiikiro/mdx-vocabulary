@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import type { PrismaClient } from '@prisma/client';
+import type { ContentModel, PrismaClient } from '@prisma/client';
 import type { DictionaryQueryService } from './dictionary-query-service.js';
 import type { DetailShadowResult, DictionaryDetailShadowVerifier, ShadowFailureCategory } from './dictionary-detail-shadow-verifier.js';
 
@@ -17,8 +17,9 @@ export class LazyDetailDiagnosticService {
   async run(dictionaryId: string, options: { sampleSize?: number; all?: boolean; seed?: string; concurrency?: number } = {}): Promise<LazyDetailDiagnosticSummary> {
     const seed = options.seed ?? 'default'; const concurrency = options.concurrency ?? 2;
     if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8) throw new RangeError('concurrency must be between 1 and 8');
-    const dictionary = await this.database.dictionary.findUnique({ where: { id: dictionaryId }, select: { name: true } });
+    const dictionary = await this.database.dictionary.findUnique({ where: { id: dictionaryId }, select: { name: true, sourceFormat: true, contentModel: true } });
     if (!dictionary) throw new Error('Dictionary not found');
+    requireMdxHtmlDictionary(dictionary);
     const candidates = await this.database.dictionaryEntry.findMany({ where: { dictionaryId }, select: { id: true, sourceOrdinal: true, mdxLocatorVersion: true,
       mdxLocatorFileChecksum: true, mdxLocatorKeyText: true, mdxLocatorKeyBlockIndex: true, mdxLocatorRecordStartOffset: true, mdxLocatorRecordEndOffset: true } });
     const requested = options.all ? candidates.length : options.sampleSize ?? 1000;
@@ -29,6 +30,7 @@ export class LazyDetailDiagnosticService {
     const verifyOne = async (entryId: string) => {
       const storedAt = performance.now(); const detail = await this.stored.getEntry(entryId); const storedDuration = performance.now() - storedAt;
       if (!detail) throw new Error('Sampled DictionaryEntry was not found');
+      if (detail.contentModel !== 'html') throw new Error('Lazy detail diagnostics require HTML entry detail');
       results.push(await this.shadow.verifyNow(detail, storedDuration));
     };
     if (selected[0]) await verifyOne(selected[0].id);
@@ -44,6 +46,12 @@ export class LazyDetailDiagnosticService {
       storedMs: stats(warm.map((x) => x.storedDurationMs)), lazyTotalMs: stats(present(warm.map((x) => x.lazyDurationMs))),
       locatorMs: stats(present(warm.map((x) => x.locatorDurationMs))), mdxFetchMs: stats(present(warm.map((x) => x.mdxFetchDurationMs))),
       transformMs: stats(present(warm.map((x) => x.transformDurationMs))), shadowOverheadMs: stats(warm.map((x) => x.shadowOverheadMs)), elapsedMs: performance.now() - started };
+  }
+}
+
+function requireMdxHtmlDictionary(dictionary: { sourceFormat: string; contentModel: ContentModel }): void {
+  if (dictionary.sourceFormat !== 'mdx' || dictionary.contentModel !== 'html') {
+    throw new Error('Lazy detail diagnostics require an MDX dictionary with HTML content');
   }
 }
 

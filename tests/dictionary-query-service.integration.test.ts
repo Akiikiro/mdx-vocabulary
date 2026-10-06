@@ -60,7 +60,9 @@ describe('DictionaryQueryService → PostgreSQL', () => {
 
     const detail = await service.getEntry(redirect.id);
     expect(detail?.redirectTarget).toBe(redirect.redirectTarget);
-    expect(detail?.sanitizedHtml.length).toBeGreaterThan(0);
+    expect(detail?.contentModel).toBe('html');
+    if (detail?.contentModel !== 'html') throw new Error('Expected HTML detail');
+    expect(detail.sanitizedHtml.length).toBeGreaterThan(0);
   });
 
   it('never exposes entry_raw', async () => {

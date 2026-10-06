@@ -28,6 +28,11 @@ enum EntryKind {
   unknown
 }
 
+enum ContentModel {
+  html
+  structured
+}
+
 model Dictionary {
   id                             String            @id @default(uuid()) @db.Uuid
   name                           String
@@ -47,6 +52,11 @@ model Dictionary {
   stylesheetUrl                  String?           @map("stylesheet_url")
   stylesheetCompatibilityProfile String?           @map("stylesheet_compatibility_profile")
   packageStorageKey              String?           @map("package_storage_key")
+  sourceFormat                   String            @default("mdx") @map("source_format")
+  sourceLanguage                 String?           @map("source_language")
+  targetLanguages                String[]          @default([]) @map("target_languages")
+  contentModel                   ContentModel      @default(html) @map("content_model")
+  sourceMetadata                 Json?             @map("source_metadata")
   entries                        DictionaryEntry[]
   importJobs                     ImportJob[]
 
@@ -55,31 +65,113 @@ model Dictionary {
 }
 
 model DictionaryEntry {
-  id                     String          @id @default(uuid()) @db.Uuid
-  dictionaryId           String          @map("dictionary_id") @db.Uuid
-  headwordOriginal       String          @map("headword_original")
-  headwordNormalized     String          @map("headword_normalized")
-  sortKey                String          @map("sort_key")
-  entryRaw               String          @map("entry_raw")
-  entrySanitizedHtml     String          @map("entry_sanitized_html")
-  entryPlainText         String          @map("entry_plain_text")
-  entryKind              EntryKind       @default(definition) @map("entry_kind")
-  redirectTargetOriginal String?         @map("redirect_target_original")
-  sourceOrdinal          Int             @map("source_ordinal")
-  mdxLocatorVersion      Int?            @map("mdx_locator_version")
-  mdxLocatorFileChecksum String?          @map("mdx_locator_file_checksum")
-  mdxLocatorKeyText      String?          @map("mdx_locator_key_text")
-  mdxLocatorKeyBlockIndex Int?            @map("mdx_locator_key_block_index")
-  mdxLocatorRecordStartOffset BigInt?     @map("mdx_locator_record_start_offset")
-  mdxLocatorRecordEndOffset BigInt?       @map("mdx_locator_record_end_offset")
-  createdAt              DateTime        @default(now()) @map("created_at")
-  dictionary             Dictionary      @relation(fields: [dictionaryId], references: [id], onDelete: Cascade)
-  vocabularyItem         VocabularyItem?
+  id                          String           @id @default(uuid()) @db.Uuid
+  dictionaryId                String           @map("dictionary_id") @db.Uuid
+  headwordOriginal            String           @map("headword_original")
+  headwordNormalized          String           @map("headword_normalized")
+  sortKey                     String           @map("sort_key")
+  entryRaw                    String?          @map("entry_raw")
+  entrySanitizedHtml          String?          @map("entry_sanitized_html")
+  entryPlainText              String           @map("entry_plain_text")
+  entryKind                   EntryKind        @default(definition) @map("entry_kind")
+  redirectTargetOriginal      String?          @map("redirect_target_original")
+  sourceOrdinal               Int              @map("source_ordinal")
+  /// Stable entry identifier assigned by the import source, scoped to the dictionary.
+  sourceRecordId              String?          @map("source_record_id")
+  mdxLocatorVersion           Int?             @map("mdx_locator_version")
+  mdxLocatorFileChecksum      String?          @map("mdx_locator_file_checksum")
+  mdxLocatorKeyText           String?          @map("mdx_locator_key_text")
+  mdxLocatorKeyBlockIndex     Int?             @map("mdx_locator_key_block_index")
+  mdxLocatorRecordStartOffset BigInt?          @map("mdx_locator_record_start_offset")
+  mdxLocatorRecordEndOffset   BigInt?          @map("mdx_locator_record_end_offset")
+  createdAt                   DateTime         @default(now()) @map("created_at")
+  dictionary                  Dictionary       @relation(fields: [dictionaryId], references: [id], onDelete: Cascade)
+  structuredEntry             StructuredEntry?
+  vocabularyItem              VocabularyItem?
 
   @@unique([dictionaryId, sourceOrdinal])
+  @@unique([dictionaryId, sourceRecordId])
   @@index([dictionaryId, headwordNormalized])
+  @@index([dictionaryId, headwordNormalized(ops: raw("text_pattern_ops"))], map: "dictionary_entries_dictionary_headword_pattern_idx")
   @@index([dictionaryId, sortKey])
   @@map("dictionary_entries")
+}
+
+model StructuredEntry {
+  entryId          String            @id @map("entry_id") @db.Uuid
+  entry            DictionaryEntry   @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  forms            Form[]
+  senses           Sense[]
+  entryDefinitions EntryDefinition[]
+
+  @@map("structured_entries")
+}
+
+model Form {
+  id                String          @id @default(uuid()) @db.Uuid
+  structuredEntryId String          @map("structured_entry_id") @db.Uuid
+  text              String
+  normalizedText    String          @map("normalized_text")
+  language          String
+  kind              String?
+  tags              String[]        @default([])
+  priorityTags      String[]        @default([]) @map("priority_tags")
+  restrictions      String[]        @default([])
+  ordinal           Int
+  structuredEntry   StructuredEntry @relation(fields: [structuredEntryId], references: [entryId], onDelete: Cascade)
+
+  @@unique([structuredEntryId, ordinal])
+  @@index([normalizedText])
+  @@index([normalizedText(ops: raw("text_pattern_ops"))], map: "structured_forms_normalized_text_pattern_idx")
+  @@map("structured_forms")
+}
+
+model Sense {
+  id                 String            @id @default(uuid()) @db.Uuid
+  structuredEntryId  String            @map("structured_entry_id") @db.Uuid
+  ordinal            Int
+  /// Snapshot-local zero-based source position; this is not a stable source sense ID.
+  sourceSenseOrdinal Int?              @map("source_sense_ordinal")
+  partOfSpeech       String[]          @default([]) @map("part_of_speech")
+  domains            String[]          @default([])
+  tags               String[]          @default([])
+  notes              String?
+  structuredEntry    StructuredEntry   @relation(fields: [structuredEntryId], references: [entryId], onDelete: Cascade)
+  senseDefinitions   SenseDefinition[]
+
+  @@unique([structuredEntryId, ordinal])
+  @@unique([structuredEntryId, sourceSenseOrdinal], map: "structured_senses_entry_source_ordinal_key")
+  @@map("structured_senses")
+}
+
+model EntryDefinition {
+  id                String          @id @default(uuid()) @db.Uuid
+  structuredEntryId String          @map("structured_entry_id") @db.Uuid
+  text              String
+  language          String
+  source            String
+  provenance        Json?
+  ordinal           Int
+  structuredEntry   StructuredEntry @relation(fields: [structuredEntryId], references: [entryId], onDelete: Cascade)
+
+  @@unique([structuredEntryId, language, source, ordinal], map: "entry_definitions_parent_language_source_ordinal_key")
+  @@index([language])
+  @@map("structured_entry_definitions")
+}
+
+model SenseDefinition {
+  id         String @id @default(uuid()) @db.Uuid
+  senseId    String @map("sense_id") @db.Uuid
+  text       String
+  language   String
+  source     String
+  provenance Json?
+  ordinal    Int
+  sense      Sense  @relation(fields: [senseId], references: [id], onDelete: Cascade)
+
+  @@unique([senseId, language, source, ordinal], map: "sense_definitions_parent_language_source_ordinal_key")
+  @@index([language])
+  @@map("structured_sense_definitions")
 }
 
 model VocabularyItem {
