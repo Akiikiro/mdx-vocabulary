@@ -7,6 +7,7 @@
 ## 已实现功能
 
 - Tomoshi SQLite CLI 导入到通用 structured schema；后端和 React 按 `contentModel` 分派 HTML/structured 搜索结果与详情渲染。Structured 日语词条以读者友好的读音、异体、词性和分义层级呈现，并可按保存的假名读音播放应用日语 TTS。
+- Meikyo StarDict source reader、lossless source AST parser 和全语料 regression audit CLI；当前仅解析/审计源结构，尚未写入 PostgreSQL 或映射 canonical schema。
 - 将本地 `.mdx` 文件复制到本地数据目录并计算 SHA-256 checksum。
 - 从浏览器选择并上传完整 MDict 文件夹；后端流式保存、验证 package，并复用 worker 导入其中唯一的 MDX。
 - 使用 PostgreSQL 保存 dictionary、entry 和 import job。
@@ -63,6 +64,7 @@ Docker Compose 只运行 `app` 和 `db`。当前实现不要求或提供 Nginx�
 
 - Importer 负责导入编排、状态更新、批量持久化和内容预处理。
 - `MdxParserAdapter` 隔离具体 MDX parser；当前实现使用 `js-mdict`。
+- `StarDictReader` 只负责验证/读取 StarDict container；`MeikyoParser` 将 Meikyo payload 转成 source-specific discriminated-union AST，并逐字节验证可重建性。它不依赖 Prisma。
 - Prisma 是 PostgreSQL 的 schema 和数据访问层。
 - Dictionary 的可选 `stylesheetUrl` 元数据声明其浏览器 stylesheet；没有声明的词典继续使用应用基础样式。
 - `DictionaryQueryService` 只负责只读 entry 查询和一跳 redirect 解析。
@@ -109,6 +111,7 @@ MDD resource foundation 按 dictionary scope 枚举 package 中的 MDD 分卷，
 | `prisma/schema.prisma` | Dictionary、DictionaryEntry（包括 nullable、versioned MDX physical locator）、VocabularyItem、ImportJob schema、枚举和索引。 |
 | `src/cli/import-mdx.ts` | 本地 MDX 导入命令；保存文件、创建 job、启动指定 job worker、输出摘要。 |
 | `src/cli/import-tomoshi.ts` | 本地 Tomoshi SQLite structured import 命令和进度/摘要输出。 |
+| `src/cli/audit-meikyo.ts` | 对 Meikyo StarDict 全语料执行 read-only、lossless parser regression，并输出 node/fallback/内存统计。 |
 | `src/cli/reprocess-entries.ts` | 对显式指定 dictionary 执行 marker-aware entry dry-run 或原地批量重处理。 |
 | `src/cli/backfill-mdx-locators.ts` | 对显式指定 dictionary 校验并 dry-run/apply 持久化 MDX locator；默认不写入。 |
 | `src/worker.ts` | Claim queued job 并调用 importer；队列为空后退出。 |
@@ -116,6 +119,8 @@ MDD resource foundation 按 dictionary scope 枚举 package 中的 MDD 分卷，
 | `src/importer/tomoshi-importer.ts` | Read-only SQLite source validation、streaming merge、canonical structured mapping、idempotent batch persistence 和失败记录。 |
 | `src/importer/dictionary-package-import-service.ts` | Package 分类验证、dictionary-owned layout 提交及 Dictionary/ImportJob 创建。 |
 | `src/mdx/` | Parser 接口以及基于 `js-mdict` 的实现。 |
+| `src/stardict/` | 与词典语义无关的 StarDict `.ifo`/`.idx`/`.dict(.dz)` 验证和 UTF-8 record reader。 |
+| `src/meikyo/` | Meikyo source-specific AST、lossless parser 和 corpus audit；不包含数据库 importer 或 canonical mapping。 |
 | `src/mdx/lazy-mdx-adapter.ts` | Hybrid POC：以 MDX checksum 和物理 record offsets 为边界构造 application-owned locator，并通过 bounded process-local parser lifecycle 精确 lazy fetch。 |
 | `src/mdx/mdx-locator-persistence.ts` | Prisma nullable locator columns 与 application-owned `MdxEntryLocator` 的严格转换和 partial-state 拒绝。 |
 | `src/resources/` | 逻辑 resource path 校验、dictionary-scoped MDD 分卷查询、浏览器音频转换，以及带磁盘缓存和并发去重的 Edge TTS。 |
@@ -312,6 +317,25 @@ Tomoshi SQLite
 → canonical structured dictionary tables
 → PostgreSQL / Prisma
 ```
+
+## Auditing Meikyo source data
+
+The Meikyo path currently stops at its lossless source AST and does not import into PostgreSQL:
+
+```text
+StarDict container
+→ StarDictReader
+→ MeikyoParser
+→ Meikyo source AST
+```
+
+Run the full-corpus regression with a directory containing one `.ifo` and its matching `.idx` and `.dict` or `.dict.dz` files:
+
+```bash
+npm run audit-meikyo -- /absolute/path/to/stardict_明镜日汉双解辞典
+```
+
+The command reports record and node counts, raw fallback reasons, parse/content-loss failures, runtime, and peak RSS. It performs no database or source-file writes.
 
 ## 持久化 MDX locators
 

@@ -12,6 +12,7 @@
     "worker": "tsx src/worker.ts",
     "import-mdx": "tsx src/cli/import-mdx.ts",
     "import-tomoshi": "tsx src/cli/import-tomoshi.ts",
+    "audit-meikyo": "tsx src/cli/audit-meikyo.ts",
     "reprocess-entries": "tsx src/cli/reprocess-entries.ts",
     "backfill-mdx-locators": "tsx src/cli/backfill-mdx-locators.ts",
     "verify-lazy-detail": "tsx src/cli/verify-lazy-detail.ts",
