@@ -39,7 +39,7 @@ export interface CanonicalContentBlockProjection {
   provenance: ProjectionProvenance;
 }
 export interface SourceArtifactProjection {
-  sourceFormat: 'stardict'; parserName: 'MeikyoParser'; parserVersion: '1'; representationVersion: 1;
+  sourceFormat: 'stardict'; parserName: string; parserVersion: string; representationVersion: number;
   sourceIdentity: { ordinal: number; indexHeadword: string };
   rawPayload: string; parsedRepresentation: unknown; diagnostics: MeikyoDiagnostic[];
   sourceMetadata: Record<string, unknown>; contentChecksum: string;

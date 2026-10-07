@@ -12,6 +12,7 @@
     "worker": "tsx src/worker.ts",
     "import-mdx": "tsx src/cli/import-mdx.ts",
     "import-tomoshi": "tsx src/cli/import-tomoshi.ts",
+    "import-meikyo": "tsx src/cli/import-meikyo.ts",
     "audit-meikyo": "tsx src/cli/audit-meikyo.ts",
     "audit-meikyo-projection": "tsx src/cli/audit-meikyo-projection.ts",
     "reprocess-entries": "tsx src/cli/reprocess-entries.ts",

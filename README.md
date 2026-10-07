@@ -7,7 +7,7 @@
 ## 已实现功能
 
 - Tomoshi SQLite CLI 导入到通用 structured schema；后端和 React 按 `contentModel` 分派 HTML/structured 搜索结果与详情渲染。Structured 日语词条以读者友好的读音、异体、词性和分义层级呈现，并可按保存的假名读音播放应用日语 TTS。
-- Meikyo StarDict source reader、lossless source AST parser 和全语料 regression audit CLI；当前仅解析/审计源结构，尚未写入 PostgreSQL 或映射 canonical schema。
+- Meikyo StarDict source reader、lossless source AST parser、conservative canonical projector、全语料 regression audit，以及可恢复的 PostgreSQL batch importer。Meikyo 仍未接入公共 query/API/frontend。
 - Canonical dictionary model v2 的 additive domain foundation：generic examples、language-aligned example text、ordered rich-content blocks/texts，以及 private dictionary source records 与 versioned parser artifacts。源记录可以不产生 lexical entry；现有 Tomoshi/MDX read path 不读取这些新表。
 - 将本地 `.mdx` 文件复制到本地数据目录并计算 SHA-256 checksum。
 - 从浏览器选择并上传完整 MDict 文件夹；后端流式保存、验证 package，并复用 worker 导入其中唯一的 MDX。
@@ -113,12 +113,14 @@ MDD resource foundation 按 dictionary scope 枚举 package 中的 MDD 分卷，
 | `prisma/schema.prisma` | Dictionary、DictionaryEntry（包括 nullable、versioned MDX physical locator）、structured lexical core、optional rich learner content、private dictionary source records/parser artifacts、VocabularyItem、ImportJob schema、枚举和索引。 |
 | `src/cli/import-mdx.ts` | 本地 MDX 导入命令；保存文件、创建 job、启动指定 job worker、输出摘要。 |
 | `src/cli/import-tomoshi.ts` | 本地 Tomoshi SQLite structured import 命令和进度/摘要输出。 |
+| `src/cli/import-meikyo.ts` | 本地 Meikyo StarDict canonical import 命令；持久化 source records、versioned artifacts、lexical core 和 ordered rich content。 |
 | `src/cli/audit-meikyo.ts` | 对 Meikyo StarDict 全语料执行 read-only、lossless parser regression，并输出 node/fallback/内存统计。 |
 | `src/cli/reprocess-entries.ts` | 对显式指定 dictionary 执行 marker-aware entry dry-run 或原地批量重处理。 |
 | `src/cli/backfill-mdx-locators.ts` | 对显式指定 dictionary 校验并 dry-run/apply 持久化 MDX locator；默认不写入。 |
 | `src/worker.ts` | Claim queued job 并调用 importer；队列为空后退出。 |
 | `src/importer/mdx-importer.ts` | 导入状态、批处理、内容转换和失败记录。 |
 | `src/importer/tomoshi-importer.ts` | Read-only SQLite source validation、streaming merge、canonical structured mapping、idempotent batch persistence 和失败记录。 |
+| `src/importer/meikyo-importer.ts` | 将已验证 Meikyo projection 以 bounded atomic batches 幂等写入 source-record 与 canonical-v2 tables；custom links 保持 source-only。 |
 | `src/importer/dictionary-package-import-service.ts` | Package 分类验证、dictionary-owned layout 提交及 Dictionary/ImportJob 创建。 |
 | `src/mdx/` | Parser 接口以及基于 `js-mdict` 的实现。 |
 | `src/stardict/` | 与词典语义无关的 StarDict `.ifo`/`.idx`/`.dict(.dz)` 验证和 UTF-8 record reader。 |
@@ -320,16 +322,28 @@ Tomoshi SQLite
 → PostgreSQL / Prisma
 ```
 
-## Auditing Meikyo source data
+## Importing and auditing Meikyo source data
 
-The Meikyo path currently stops at its lossless source AST and does not import into PostgreSQL:
+Meikyo import keeps source parsing, projection, validation, and persistence as separate stages:
 
 ```text
 StarDict container
 → StarDictReader
 → MeikyoParser
 → Meikyo source AST
+→ MeikyoCanonicalProjector / validator
+→ MeikyoImporter
+→ canonical-v2 PostgreSQL tables
 ```
+
+After applying migrations, import a directory containing exactly one `.ifo` and its matching StarDict files:
+
+```bash
+npm run import-meikyo -- /absolute/path/to/stardict_明镜日汉双解辞典
+node dist/cli/import-meikyo.js /absolute/path/to/stardict_明镜日汉双解辞典
+```
+
+Optional arguments are `--name "Dictionary name"` and `--batch-size 100`. The package checksum identifies an immutable dictionary snapshot. Re-running the same snapshot verifies source records/artifacts and transactionally rebuilds each completed batch while preserving deterministic DictionaryEntry IDs and VocabularyItem relationships. Custom-link records remain private source records with no lexical entry.
 
 Run the full-corpus regression with a directory containing one `.ifo` and its matching `.idx` and `.dict` or `.dict.dz` files:
 
