@@ -89,6 +89,7 @@ model Dictionary {
   contentModel                   ContentModel      @default(html) @map("content_model")
   sourceMetadata                 Json?             @map("source_metadata")
   entries                        DictionaryEntry[]
+  sourceRecords                  DictionarySourceRecord[]
   importJobs                     ImportJob[]
 
   @@index([status])
@@ -120,9 +121,11 @@ model DictionaryEntry {
   structuredEntry             StructuredEntry?
   vocabularyItem              VocabularyItem?
   sourceArtifacts             EntrySourceArtifact[]
+  sourceRecord                DictionarySourceRecord?
 
   @@unique([dictionaryId, sourceOrdinal])
   @@unique([dictionaryId, sourceRecordId])
+  @@unique([dictionaryId, id], map: "dictionary_entries_dictionary_id_id_key")
   @@index([dictionaryId, headwordNormalized])
   @@index([dictionaryId, headwordNormalized(ops: raw("text_pattern_ops"))], map: "dictionary_entries_dictionary_headword_pattern_idx")
   @@index([dictionaryId, sortKey])
@@ -255,6 +258,8 @@ model ContentText {
   @@map("structured_content_texts")
 }
 
+/// Legacy canonical-v2 entry-owned artifact. Retained for additive migration compatibility;
+/// new source integrations use DictionarySourceRecord and DictionarySourceArtifact.
 model EntrySourceArtifact {
   id                    String          @id @default(uuid()) @db.Uuid
   entryId               String          @map("entry_id") @db.Uuid
@@ -275,6 +280,50 @@ model EntrySourceArtifact {
   @@unique([entryId, parserName, parserVersion, representationVersion, contentChecksum], map: "entry_source_artifacts_version_key")
   @@index([sourceFormat])
   @@map("entry_source_artifacts")
+}
+
+/// Stable, lossless identity for one record in an imported dictionary source.
+/// It may remain deferred without creating a searchable DictionaryEntry.
+model DictionarySourceRecord {
+  id              String                     @id @default(uuid()) @db.Uuid
+  dictionaryId    String                     @map("dictionary_id") @db.Uuid
+  entryId         String?                    @map("entry_id") @db.Uuid
+  sourceKey       String                     @map("source_key")
+  sourceOrdinal   Int                        @map("source_ordinal")
+  recordKind      String                     @map("record_kind")
+  sourceIdentity  Json                       @map("source_identity")
+  rawPayload      String?                    @map("raw_payload")
+  rawPayloadBytes Bytes?                     @map("raw_payload_bytes")
+  contentChecksum String                     @map("content_checksum")
+  sourceMetadata  Json?                      @map("source_metadata")
+  createdAt       DateTime                   @default(now()) @map("created_at")
+  dictionary      Dictionary                 @relation(fields: [dictionaryId], references: [id], onDelete: Cascade)
+  entry           DictionaryEntry?           @relation(fields: [dictionaryId, entryId], references: [dictionaryId, id], onDelete: Restrict, map: "dictionary_source_records_dictionary_entry_fkey")
+  artifacts       DictionarySourceArtifact[]
+
+  @@unique([dictionaryId, sourceKey], map: "dictionary_source_records_dictionary_source_key_key")
+  @@unique([dictionaryId, sourceOrdinal], map: "dictionary_source_records_dictionary_ordinal_key")
+  @@unique([dictionaryId, entryId], map: "dictionary_source_records_dictionary_entry_key")
+  @@index([dictionaryId, recordKind], map: "dictionary_source_records_dictionary_kind_idx")
+  @@map("dictionary_source_records")
+}
+
+/// Versioned parser output derived from a DictionarySourceRecord's authoritative payload.
+model DictionarySourceArtifact {
+  id                     String                 @id @default(uuid()) @db.Uuid
+  sourceRecordId         String                 @map("source_record_id") @db.Uuid
+  parserName             String                 @map("parser_name")
+  parserVersion          String                 @map("parser_version")
+  representationVersion  Int                    @map("representation_version")
+  parsedRepresentation   Json?                  @map("parsed_representation")
+  diagnostics            Json?
+  artifactMetadata       Json?                  @map("artifact_metadata")
+  representationChecksum String                 @map("representation_checksum")
+  createdAt              DateTime               @default(now()) @map("created_at")
+  sourceRecord           DictionarySourceRecord @relation(fields: [sourceRecordId], references: [id], onDelete: Cascade)
+
+  @@unique([sourceRecordId, parserName, parserVersion, representationVersion], map: "dictionary_source_artifacts_version_key")
+  @@map("dictionary_source_artifacts")
 }
 
 model EntryDefinition {
