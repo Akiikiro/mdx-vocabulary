@@ -33,6 +33,37 @@ enum ContentModel {
   structured
 }
 
+enum ContentBlockKind {
+  definition
+  example
+  annotation
+  section
+  subdivision
+  raw
+}
+
+enum ContentAnnotationKind {
+  note
+  grammar
+  orthography
+  usage
+  caution
+  expression
+  etymology
+  derivative
+  other
+}
+
+enum ContentTextRole {
+  source
+  translation
+  transliteration
+  definition
+  label
+  body
+  other
+}
+
 model Dictionary {
   id                             String            @id @default(uuid()) @db.Uuid
   name                           String
@@ -88,6 +119,7 @@ model DictionaryEntry {
   dictionary                  Dictionary       @relation(fields: [dictionaryId], references: [id], onDelete: Cascade)
   structuredEntry             StructuredEntry?
   vocabularyItem              VocabularyItem?
+  sourceArtifacts             EntrySourceArtifact[]
 
   @@unique([dictionaryId, sourceOrdinal])
   @@unique([dictionaryId, sourceRecordId])
@@ -103,6 +135,8 @@ model StructuredEntry {
   forms            Form[]
   senses           Sense[]
   entryDefinitions EntryDefinition[]
+  examples         Example[]
+  contentBlocks    ContentBlock[]
 
   @@map("structured_entries")
 }
@@ -138,10 +172,109 @@ model Sense {
   notes              String?
   structuredEntry    StructuredEntry   @relation(fields: [structuredEntryId], references: [entryId], onDelete: Cascade)
   senseDefinitions   SenseDefinition[]
+  examples           Example[]
+  contentBlocks      ContentBlock[]
 
   @@unique([structuredEntryId, ordinal])
   @@unique([structuredEntryId, sourceSenseOrdinal], map: "structured_senses_entry_source_ordinal_key")
+  @@unique([structuredEntryId, id], map: "structured_senses_entry_id_key")
   @@map("structured_senses")
+}
+
+model Example {
+  id                String          @id @default(uuid()) @db.Uuid
+  structuredEntryId String          @map("structured_entry_id") @db.Uuid
+  senseId           String?         @map("sense_id") @db.Uuid
+  ordinal           Int
+  source            String
+  provenance        Json?
+  contentBlockId    String?         @map("content_block_id") @db.Uuid
+  structuredEntry   StructuredEntry @relation(fields: [structuredEntryId], references: [entryId], onDelete: Cascade)
+  sense             Sense?          @relation(fields: [structuredEntryId, senseId], references: [structuredEntryId, id], onDelete: Restrict, map: "structured_examples_entry_sense_fkey")
+  contentBlock      ContentBlock?   @relation(fields: [structuredEntryId, contentBlockId], references: [structuredEntryId, id], onDelete: Restrict, map: "structured_examples_entry_content_block_fkey")
+  texts             ExampleText[]
+
+  @@unique([structuredEntryId, ordinal], map: "structured_examples_entry_ordinal_key")
+  @@unique([structuredEntryId, contentBlockId], map: "structured_examples_entry_content_block_key")
+  @@index([senseId])
+  @@map("structured_examples")
+}
+
+model ExampleText {
+  id         String          @id @default(uuid()) @db.Uuid
+  exampleId  String          @map("example_id") @db.Uuid
+  language   String?
+  role       ContentTextRole
+  text       String
+  ordinal    Int
+  source     String
+  provenance Json?
+  example    Example         @relation(fields: [exampleId], references: [id], onDelete: Cascade)
+
+  @@unique([exampleId, ordinal])
+  @@index([language])
+  @@map("structured_example_texts")
+}
+
+model ContentBlock {
+  id                String                 @id @default(uuid()) @db.Uuid
+  structuredEntryId String                 @map("structured_entry_id") @db.Uuid
+  parentBlockId     String?                @map("parent_block_id") @db.Uuid
+  senseId           String?                @map("sense_id") @db.Uuid
+  kind              ContentBlockKind
+  annotationKind    ContentAnnotationKind? @map("annotation_kind")
+  ordinal           Int
+  source            String
+  provenance        Json?
+  structuredEntry   StructuredEntry        @relation(fields: [structuredEntryId], references: [entryId], onDelete: Cascade)
+  sense             Sense?                 @relation(fields: [structuredEntryId, senseId], references: [structuredEntryId, id], onDelete: Restrict, map: "structured_content_blocks_entry_sense_fkey")
+  parent            ContentBlock?          @relation("ContentBlockChildren", fields: [structuredEntryId, parentBlockId], references: [structuredEntryId, id], onDelete: Restrict, map: "structured_content_blocks_entry_parent_fkey")
+  children          ContentBlock[]         @relation("ContentBlockChildren")
+  example           Example?
+  texts             ContentText[]
+
+  @@unique([structuredEntryId, id], map: "structured_content_blocks_entry_id_key")
+  @@index([structuredEntryId, parentBlockId, ordinal], map: "structured_content_blocks_entry_parent_ordinal_idx")
+  @@index([senseId])
+  @@map("structured_content_blocks")
+}
+
+model ContentText {
+  id             String          @id @default(uuid()) @db.Uuid
+  contentBlockId String          @map("content_block_id") @db.Uuid
+  language       String?
+  role           ContentTextRole
+  text           String
+  ordinal        Int
+  source         String
+  provenance     Json?
+  contentBlock   ContentBlock    @relation(fields: [contentBlockId], references: [id], onDelete: Cascade)
+
+  @@unique([contentBlockId, ordinal], map: "structured_content_texts_block_ordinal_key")
+  @@index([language])
+  @@map("structured_content_texts")
+}
+
+model EntrySourceArtifact {
+  id                    String          @id @default(uuid()) @db.Uuid
+  entryId               String          @map("entry_id") @db.Uuid
+  sourceFormat          String          @map("source_format")
+  sourceIdentity        Json            @map("source_identity")
+  parserName            String          @map("parser_name")
+  parserVersion         String          @map("parser_version")
+  representationVersion Int             @map("representation_version")
+  rawPayload            String?         @map("raw_payload")
+  rawPayloadBytes       Bytes?          @map("raw_payload_bytes")
+  parsedRepresentation  Json?           @map("parsed_representation")
+  diagnostics           Json?
+  sourceMetadata        Json?           @map("source_metadata")
+  contentChecksum       String          @map("content_checksum")
+  createdAt             DateTime        @default(now()) @map("created_at")
+  entry                 DictionaryEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+
+  @@unique([entryId, parserName, parserVersion, representationVersion, contentChecksum], map: "entry_source_artifacts_version_key")
+  @@index([sourceFormat])
+  @@map("entry_source_artifacts")
 }
 
 model EntryDefinition {

@@ -8,6 +8,7 @@
 
 - Tomoshi SQLite CLI 导入到通用 structured schema；后端和 React 按 `contentModel` 分派 HTML/structured 搜索结果与详情渲染。Structured 日语词条以读者友好的读音、异体、词性和分义层级呈现，并可按保存的假名读音播放应用日语 TTS。
 - Meikyo StarDict source reader、lossless source AST parser 和全语料 regression audit CLI；当前仅解析/审计源结构，尚未写入 PostgreSQL 或映射 canonical schema。
+- Canonical dictionary model v2 的 additive domain foundation：generic examples、language-aligned example text、ordered rich-content blocks/texts，以及 private versioned entry source artifacts。现有 Tomoshi/MDX read path 不读取这些新表。
 - 将本地 `.mdx` 文件复制到本地数据目录并计算 SHA-256 checksum。
 - 从浏览器选择并上传完整 MDict 文件夹；后端流式保存、验证 package，并复用 worker 导入其中唯一的 MDX。
 - 使用 PostgreSQL 保存 dictionary、entry 和 import job。
@@ -65,6 +66,7 @@ Docker Compose 只运行 `app` 和 `db`。当前实现不要求或提供 Nginx�
 - Importer 负责导入编排、状态更新、批量持久化和内容预处理。
 - `MdxParserAdapter` 隔离具体 MDX parser；当前实现使用 `js-mdict`。
 - `StarDictReader` 只负责验证/读取 StarDict container；`MeikyoParser` 将 Meikyo payload 转成 source-specific discriminated-union AST，并逐字节验证可重建性。它不依赖 Prisma。
+- Structured canonical data 保留 `Form` / `Sense` / entry- and sense-level definitions 作为 lexical core；optional `Example` / `ContentBlock` graph 补充 rich learner content，`EntrySourceArtifact` 独立保存 private source representation。MDX HTML 不转换为 blocks。
 - Prisma 是 PostgreSQL 的 schema 和数据访问层。
 - Dictionary 的可选 `stylesheetUrl` 元数据声明其浏览器 stylesheet；没有声明的词典继续使用应用基础样式。
 - `DictionaryQueryService` 只负责只读 entry 查询和一跳 redirect 解析。
@@ -108,7 +110,7 @@ MDD resource foundation 按 dictionary scope 枚举 package 中的 MDD 分卷，
 
 | 路径 | 职责 |
 | --- | --- |
-| `prisma/schema.prisma` | Dictionary、DictionaryEntry（包括 nullable、versioned MDX physical locator）、VocabularyItem、ImportJob schema、枚举和索引。 |
+| `prisma/schema.prisma` | Dictionary、DictionaryEntry（包括 nullable、versioned MDX physical locator）、structured lexical core、optional rich learner content、private source artifacts、VocabularyItem、ImportJob schema、枚举和索引。 |
 | `src/cli/import-mdx.ts` | 本地 MDX 导入命令；保存文件、创建 job、启动指定 job worker、输出摘要。 |
 | `src/cli/import-tomoshi.ts` | 本地 Tomoshi SQLite structured import 命令和进度/摘要输出。 |
 | `src/cli/audit-meikyo.ts` | 对 Meikyo StarDict 全语料执行 read-only、lossless parser regression，并输出 node/fallback/内存统计。 |
