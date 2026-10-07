@@ -28,6 +28,14 @@ describe('EdgeTtsService', () => {
     expect(synthesize).toHaveBeenNthCalledWith(2, 'vocabulary', 'en-US-BrianNeural', 1);
   });
 
+  it('uses Japanese voices for Japanese text synthesis', async () => {
+    const service = new EdgeTtsService(root, provider);
+    await service.getTextAudio('いっしょうけんめい', 'female', 1, 'ja');
+    await service.getTextAudio('たべる', 'male', 1, 'ja');
+    expect(synthesize).toHaveBeenNthCalledWith(1, 'いっしょうけんめい', 'ja-JP-NanamiNeural', 1);
+    expect(synthesize).toHaveBeenNthCalledWith(2, 'たべる', 'ja-JP-KeitaNeural', 1);
+  });
+
   it('deduplicates concurrent synthesis and then uses the disk cache', async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });

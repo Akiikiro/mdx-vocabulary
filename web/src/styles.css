@@ -94,24 +94,29 @@ h2 { margin: 0 0 18px; font-size: 1.05rem; }
 .dictionary-entry .x-g, .dictionary-entry .def-g { display: block; margin: 7px 0; }
 .dictionary-entry .pos { color: #8d3b2e; font-style: italic; }
 .dictionary-entry a { color: #176448; }
-.structured-entry { display: grid; gap: 24px; font-family: inherit; line-height: 1.65; }
-.structured-section { margin: 0; }
-.structured-section > h4 { margin: 0 0 11px; color: #26342e; font-size: .82rem; letter-spacing: .06em; text-transform: uppercase; }
-.structured-forms ul { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
-.structured-forms li { display: inline-flex; align-items: baseline; gap: 7px; padding: 5px 9px; border: 1px solid #dce5e0; border-radius: 7px; background: #f7faf8; }
-.form-kind { color: #758078; font-size: .68rem; text-transform: uppercase; }
-.entry-definitions { padding: 15px 17px; border-left: 3px solid #8bb7a4; background: #f6f9f7; }
-.definition-groups { display: grid; gap: 13px; }
-.definition-language-group h5 { margin: 0 0 4px; color: #28775b; font-size: .74rem; letter-spacing: .04em; text-transform: uppercase; }
-.definition-language-group ul { margin: 0; padding-left: 1.25rem; }
-.definition-language-group li + li { margin-top: 4px; }
-.structured-senses > ol { display: grid; gap: 18px; margin: 0; padding-left: 1.8rem; }
-.structured-senses > ol > li { padding: 0 0 18px 5px; border-bottom: 1px solid #e7ebe8; }
-.structured-senses > ol > li:last-child { padding-bottom: 0; border-bottom: 0; }
-.sense-metadata { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0 0 10px; }
-.sense-metadata div { display: inline-flex; gap: 5px; }
-.sense-metadata dt { color: #758078; font-size: .72rem; font-weight: 700; }
-.sense-metadata dd { margin: 0; color: #8d3b2e; font-size: .78rem; }
+.structured-entry { display: grid; gap: 15px; font-family: inherit; line-height: 1.65; }
+.structured-readings { display: flex; flex-wrap: wrap; gap: 7px 18px; margin-top: -13px; color: #315d4e; font-size: 1.12rem; }
+.structured-reading { display: inline-flex; align-items: center; gap: 5px; }
+.structured-pronunciation-button { display: inline-flex; align-items: center; justify-content: center; width: 1.65rem; height: 1.65rem; padding: 0; border: 1px solid #b7c9c0; border-radius: 999px; background: #edf6f1; color: #176448; font-size: .76rem; line-height: 1; cursor: pointer; }
+.structured-pronunciation-button:hover, .structured-pronunciation-button:focus-visible { border-color: #176448; background: #dfeee7; }
+.structured-pronunciation-button.loading { cursor: progress; }
+.structured-pronunciation-button.error { border-color: #d4c9c6; background: #f4f1ef; color: #8d5f57; }
+.structured-alternate-forms { color: #68736d; font-size: .92rem; }
+.structured-alternate-forms small { color: #89928e; font-size: .72rem; }
+.structured-meanings { margin-top: 5px; padding-top: 17px; border-top: 1px solid #e2e7e4; }
+.structured-meanings > h4 { margin: 0 0 13px; color: #26342e; font-size: .92rem; font-weight: 700; }
+.entry-level-definitions { margin-bottom: 13px; padding-bottom: 13px; border-bottom: 1px solid #edf0ee; }
+.definition-rows { display: grid; gap: 7px; }
+.definition-row { display: grid; grid-template-columns: 1.8rem minmax(0, 1fr); gap: 8px; }
+.definition-language { color: #28775b; font-family: ui-sans-serif, system-ui, sans-serif; font-size: .76rem; font-weight: 800; }
+.definition-row ul { display: flex; flex-wrap: wrap; gap: 0; margin: 0; padding: 0; list-style: none; }
+.definition-row li:not(:last-child)::after { content: "；"; }
+.structured-meanings ol { display: grid; gap: 16px; margin: 0; padding: 0; }
+.structured-meanings ol.single-sense { list-style: none; }
+.structured-meanings ol.numbered-senses { padding-left: 1.7rem; }
+.structured-meanings ol.numbered-senses > li { padding-left: 3px; }
+.structured-meanings ol.numbered-senses > li + li { padding-top: 13px; border-top: 1px solid #edf0ee; }
+.learner-metadata { margin: 0 0 7px; color: #8d3b2e; font-size: .8rem; font-weight: 700; }
 .sense-note { margin: 0 0 10px; color: #5f6964; font-style: italic; }
 .dictionary-resource-image { max-width: 100%; height: auto; vertical-align: middle; }
 .mdict-entry-reference { color: #176448; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 0.15em; cursor: pointer; }

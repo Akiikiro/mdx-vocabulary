@@ -19,7 +19,6 @@ import {
   type SearchEntry,
   type VocabularyItem,
 } from './api';
-import { entryStylesheetUrls } from './dictionary-stylesheets';
 import { EntryRenderer } from './EntryRenderer';
 import { SearchResultContent } from './SearchResultContent';
 
@@ -74,8 +73,6 @@ export function App() {
   const dictionaryStylesheetCompatibilityProfile = dictionaries.find(
     (dictionary) => dictionary.id === styledDictionaryId,
   )?.stylesheetCompatibilityProfile ?? null;
-
-  useDictionaryStylesheet(detail?.contentModel ?? null, dictionaryStylesheetUrl, dictionaryStylesheetCompatibilityProfile);
 
   useEffect(() => () => {
     generationController.current?.abort();
@@ -633,6 +630,8 @@ export function App() {
               detail={detail}
               expanded={detailExpanded}
               onNavigateEntryReference={navigateEntryReference}
+              stylesheetUrl={dictionaryStylesheetUrl}
+              stylesheetCompatibilityProfile={dictionaryStylesheetCompatibilityProfile}
             />
           </article>
         )}
@@ -756,25 +755,6 @@ export function App() {
       </section>}
     </main>
   );
-}
-
-function useDictionaryStylesheet(
-  contentModel: 'html' | 'structured' | null,
-  stylesheetUrl: string | null,
-  compatibilityProfile: string | null,
-) {
-  useEffect(() => {
-    document.querySelectorAll('link[data-dictionary-stylesheet]').forEach((stylesheet) => stylesheet.remove());
-    const stylesheets = entryStylesheetUrls(contentModel, stylesheetUrl, compatibilityProfile).map((url) => {
-      const stylesheet = document.createElement('link');
-      stylesheet.rel = 'stylesheet';
-      stylesheet.dataset.dictionaryStylesheet = '';
-      stylesheet.href = url;
-      document.head.append(stylesheet);
-      return stylesheet;
-    });
-    return () => stylesheets.forEach((stylesheet) => stylesheet.remove());
-  }, [contentModel, stylesheetUrl, compatibilityProfile]);
 }
 
 function formatAddedTime(value: string): string {

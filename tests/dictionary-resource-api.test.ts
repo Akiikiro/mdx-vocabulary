@@ -194,7 +194,13 @@ describe('dictionary resource HTTP API', () => {
     expect(response.headers['content-type']).toBe('audio/mpeg');
     expect(response.headers['cache-control']).toBe('private, max-age=86400');
     expect(response.rawPayload).toEqual(Buffer.from('ID3paragraph'));
-    expect(getTextAudio).toHaveBeenCalledWith(text, 'female', 0.9);
+    expect(getTextAudio).toHaveBeenCalledWith(text, 'female', 0.9, 'en');
+
+    const japanese = await server.inject({
+      method: 'POST', url: '/api/tts', payload: { text: 'いっしょうけんめい', voice: 'female', rate: 1, language: 'ja' },
+    });
+    expect(japanese.statusCode).toBe(200);
+    expect(getTextAudio).toHaveBeenCalledWith('いっしょうけんめい', 'female', 1, 'ja');
 
     const invalid = await server.inject({
       method: 'POST', url: '/api/tts', payload: { text: 'test', voice: 'female', rate: 3 },
@@ -213,6 +219,8 @@ describe('dictionary resource HTTP API', () => {
     expect(route.requestBody.content['application/json'].schema).toEqual(expect.objectContaining({
       required: ['text', 'voice', 'rate'], additionalProperties: false,
     }));
+    expect(route.requestBody.content['application/json'].schema.properties.language)
+      .toEqual(expect.objectContaining({ enum: ['en', 'ja'], default: 'en' }));
     expect(route.responses['200'].content['audio/mpeg'].schema).toEqual({ type: 'string', format: 'binary' });
   });
 

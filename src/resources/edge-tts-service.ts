@@ -14,10 +14,11 @@ export const MIN_TTS_RATE = 0.5;
 export const MAX_TTS_RATE = 2;
 
 export type EdgeTtsVoice = 'female' | 'male';
+export type EdgeTtsLanguage = 'en' | 'ja';
 
-const EDGE_TTS_VOICES: Record<EdgeTtsVoice, string> = {
-  female: 'en-US-AvaNeural',
-  male: 'en-US-BrianNeural',
+const EDGE_TTS_VOICES: Record<EdgeTtsLanguage, Record<EdgeTtsVoice, string>> = {
+  en: { female: 'en-US-AvaNeural', male: 'en-US-BrianNeural' },
+  ja: { female: 'ja-JP-NanamiNeural', male: 'ja-JP-KeitaNeural' },
 };
 
 export class EdgeTtsError extends Error {
@@ -67,10 +68,10 @@ export class EdgeTtsService {
     if (!word || Array.from(word).length > MAX_WORD_LENGTH || /[\u0000-\u001f\u007f]/u.test(word)) {
       throw new EdgeTtsError('INVALID_EDGE_TTS_REQUEST', 'word must contain 1 to 100 safe characters');
     }
-    return this.getTextAudio(word, voiceSelection, 1);
+    return this.getTextAudio(word, voiceSelection, 1, 'en');
   }
 
-  async getTextAudio(inputText: string, voiceSelection: EdgeTtsVoice, rate: number): Promise<EdgeTtsAudio> {
+  async getTextAudio(inputText: string, voiceSelection: EdgeTtsVoice, rate: number, language: EdgeTtsLanguage = 'en'): Promise<EdgeTtsAudio> {
     const text = validateText(inputText);
     if (voiceSelection !== 'female' && voiceSelection !== 'male') {
       throw new EdgeTtsError('INVALID_EDGE_TTS_REQUEST', 'voice must be female or male');
@@ -78,7 +79,10 @@ export class EdgeTtsService {
     if (!Number.isFinite(rate) || rate < MIN_TTS_RATE || rate > MAX_TTS_RATE) {
       throw new EdgeTtsError('INVALID_EDGE_TTS_REQUEST', `rate must be between ${MIN_TTS_RATE} and ${MAX_TTS_RATE}`);
     }
-    const voice = EDGE_TTS_VOICES[voiceSelection];
+    if (language !== 'en' && language !== 'ja') {
+      throw new EdgeTtsError('INVALID_EDGE_TTS_REQUEST', 'language must be en or ja');
+    }
+    const voice = EDGE_TTS_VOICES[language][voiceSelection];
     const cacheKey = crypto.createHash('sha256').update(JSON.stringify({
       text,
       voice,

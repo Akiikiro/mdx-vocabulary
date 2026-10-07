@@ -6,7 +6,7 @@
 
 ## 已实现功能
 
-- Tomoshi SQLite CLI 导入到通用 structured schema；后端和 React 按 `contentModel` 分派 HTML/structured 搜索结果与详情渲染。
+- Tomoshi SQLite CLI 导入到通用 structured schema；后端和 React 按 `contentModel` 分派 HTML/structured 搜索结果与详情渲染。Structured 日语词条以读者友好的读音、异体、词性和分义层级呈现，并可按保存的假名读音播放应用日语 TTS。
 - 将本地 `.mdx` 文件复制到本地数据目录并计算 SHA-256 checksum。
 - 从浏览器选择并上传完整 MDict 文件夹；后端流式保存、验证 package，并复用 worker 导入其中唯一的 MDX。
 - 使用 PostgreSQL 保存 dictionary、entry 和 import job。
@@ -20,7 +20,7 @@
 - Fastify 参数校验、统一错误响应和 OpenAPI schema。
 - Swagger UI 和 JSON/YAML OpenAPI 文档。
 - React Dictionary view：选择字典、prefix autocomplete 候选、键盘选择及可折叠的完整词条展示。
-- Dictionary 可声明可选 stylesheet URL；Oxford 8 使用随 Web 应用发布的 `O8C.css`，恢复 sanitized HTML 中保留 class 所支持的词典样式。前端通过安全的 MDict marker 显示 MDD 图片和发音控件，并在当前 dictionary 内解析内部词条引用。
+- Dictionary 可声明可选 stylesheet URL；HTML 词典 stylesheet 在词条 shadow root 内加载，不参与应用 shell 的 CSS cascade。Oxford 8 使用随 Web 应用发布的 `O8C.css`，恢复 sanitized HTML 中保留 class 所支持的词典样式。前端通过安全的 MDict marker 显示 MDD 图片和发音控件，并在当前 dictionary 内解析内部词条引用。
 - Package 中唯一的 CSS 会自动绑定并由 Fastify dictionary asset route 提供；已知 stylesheet 通过内容 fingerprint 获得 rendering compatibility profile，使重复导入保持相同 override。MDD 资源按 dictionary 保存并由 scoped resource API 按需读取。
 - 单用户本地 Vocabulary Book：收藏词条到 PostgreSQL、持久展示、重新打开完整词条和移除收藏。
 - Vocabulary Book 可勾选已收藏词条，通过外部 Ollama 动态发现并选择 model，以 JSON Schema structured output 生成内容；前端实时显示英文正文 draft，后端保留完整 validation 和最多一次 correction retry，通过后显示中英双语结果。
@@ -76,7 +76,7 @@ Docker Compose 只运行 `app` 和 `db`。当前实现不要求或提供 Nginx�
 2. Worker claim job，通过 `JsMdictAdapter` 检查文件 metadata 并迭代词条。
 3. Importer 清除 PostgreSQL 不接受的 NUL 字符，标准化 headword，生成 sort key，识别 redirect；对新导入的 definition，先将合法 MDict internal references 转换为不含 dictionary UUID/HTTP URL 的 inert typed markers，再严格清洗 HTML 并提取纯文本。已有 rows 不会在启动时自动重处理。
 4. 词条按 `IMPORT_BATCH_SIZE` 批量写入 PostgreSQL；成功后 dictionary 变为 `ready`。
-5. 浏览器先请求 ready dictionary 列表，按当前词典的可选 `stylesheetUrl` 动态加载或卸载 stylesheet，再向指定 dictionary 发起 exact 或 prefix 搜索。
+5. 浏览器先请求 ready dictionary 列表，向指定 dictionary 发起 exact 或 prefix 搜索，并把 HTML 词典的可选 `stylesheetUrl` 加载到对应词条的 shadow root。
 6. Fastify 校验请求并调用 `DictionaryQueryService`；服务通过 Prisma 执行显式字段查询。
 7. Entry detail 中经过后端验证的 sound markers 会由前端增强为轻量播放按钮，并通过 dictionary-scoped MDD resource API 播放原始音频；任一时刻只播放一个发音。
 8. React 展示搜索 DTO 的纯文本预览；点击结果后获取 detail DTO，并渲染后端保存的 `sanitizedHtml`。
@@ -384,7 +384,7 @@ http://127.0.0.1:3000
 | GET | `/api/dictionaries/:dictionaryId/resources/*` | 按大小写敏感的 Unicode 逻辑路径精确读取该 dictionary 的 MDD resource bytes。 |
 | GET | `/api/dictionaries/:dictionaryId/browser-audio/*` | 将经过校验的 Ogg/Speex 发音资源按需转换为浏览器兼容的 mono MP3，并使用包/内容身份感知的磁盘缓存。 |
 | GET | `/api/experimental/edge-tts?word=<word>&voice=female|male` | 实验性 Edge TTS 发音；女性固定使用 `en-US-AvaNeural`，男性固定使用 `en-US-BrianNeural`，生成并分别缓存 MP3。 |
-| POST | `/api/tts` | 按需为经过验证的文本生成 Edge TTS MP3；接受 `text`、`voice`（`female` / `male`）和 `rate`（0.5–2），最多 2000 个字符。 |
+| POST | `/api/tts` | 按需为经过验证的文本生成 Edge TTS MP3；接受 `text`、`voice`（`female` / `male`）、`rate`（0.5–2）和可选 `language`（`en` / `ja`，默认 `en`），最多 2000 个字符。 |
 | GET | `/api/ai/models` | 返回已配置 AI providers 及动态发现的 models；响应使用应用自有稳定 DTO。 |
 | POST | `/api/ai/generate-paragraph` | 接受运行时 `{ provider, model, words }`，返回 `{ paragraph, translation, usedWords }`；无效生成最多纠正重试一次。 |
 | POST | `/api/ai/generate-paragraph/stream` | 接受相同请求并返回 NDJSON attempt、正文 delta 和最终 validated result；纠正重试前发送新的 attempt 以重置 draft。 |
@@ -439,7 +439,7 @@ http://127.0.0.1:5173
 
 `web/vite.config.ts` 将 `/api` 转发到 `http://127.0.0.1:3000`。前端源代码始终请求相对 `/api/...` URL，不依赖固定 backend host 或 port。
 
-Dictionary stylesheet 由 `/api/dictionaries` 返回的 `stylesheetUrl` 和 `stylesheetCompatibilityProfile` 驱动，只在显示对应词典时挂载。原始 stylesheet 先加载，profile 对应的应用 compatibility override 后加载。Oxford 8 profile 由 O8C.css 内容 fingerprint 识别，因此静态旧数据、CLI 可读取的本地 stylesheet 及 folder re-import 不依赖 Dictionary UUID，均可获得一致的 sense marker 修正。该机制只负责 CSS，不提供 MDD、图片、字体或音频资源解析。
+Dictionary stylesheet 由 `/api/dictionaries` 返回的 `stylesheetUrl` 和 `stylesheetCompatibilityProfile` 驱动，只在对应 HTML 词条的 shadow root 内挂载。原始 stylesheet 先加载，profile 对应的应用 compatibility override 后加载；全局 `body`、`main` 等 selector 无法匹配应用 shell。Oxford 8 profile 由 O8C.css 内容 fingerprint 识别，因此静态旧数据、CLI 可读取的本地 stylesheet 及 folder re-import 不依赖 Dictionary UUID，均可获得一致的 sense marker 修正。该机制只负责 CSS，不提供 MDD、图片、字体或音频资源解析。
 
 Dictionary view 的 **Import Dictionary** 使用浏览器目录选择器。选中后会显示 MDX、CSS、MDD、图片及总文件数；确认 Import 后显示 Uploading、Queued、Importing、Ready 或 Failed。Ready 后 dictionary selector 会刷新并自动选中新词典。Package import 的 stylesheet 由 backend asset route 提供，不需要手工指定 `--stylesheet-url`。
 

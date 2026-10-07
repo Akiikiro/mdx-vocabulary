@@ -37,6 +37,7 @@ import {
   MAX_TTS_RATE,
   MAX_TTS_TEXT_LENGTH,
   MIN_TTS_RATE,
+  type EdgeTtsLanguage,
   type EdgeTtsVoice,
 } from '../resources/edge-tts-service.js';
 import { InvalidLogicalResourcePathError } from '../resources/logical-resource-path.js';
@@ -69,7 +70,7 @@ interface SearchQuery { q: string; mode?: 'exact' | 'prefix'; limit?: number; of
 interface DictionaryParams { dictionaryId: string }
 interface DictionaryAssetParams extends DictionaryParams { '*': string }
 interface EdgeTtsQuery { word: string; voice: EdgeTtsVoice }
-interface TtsBody { text: string; voice: EdgeTtsVoice; rate: number }
+interface TtsBody { text: string; voice: EdgeTtsVoice; rate: number; language?: EdgeTtsLanguage }
 interface GenerateParagraphBody { provider: string; model: string; words: string[] }
 
 export interface ApiServerOptions {
@@ -770,6 +771,7 @@ export async function createApiServer(database: PrismaClient, options: ApiServer
           text: { type: 'string', minLength: 1, maxLength: MAX_TTS_TEXT_LENGTH },
           voice: { type: 'string', enum: ['female', 'male'] },
           rate: { type: 'number', minimum: MIN_TTS_RATE, maximum: MAX_TTS_RATE },
+          language: { type: 'string', enum: ['en', 'ja'], default: 'en' },
         },
       },
       response: {
@@ -779,7 +781,9 @@ export async function createApiServer(database: PrismaClient, options: ApiServer
     },
   }, async (request, reply) => {
     try {
-      const audio = await edgeTtsService.getTextAudio(request.body.text, request.body.voice, request.body.rate);
+      const audio = await edgeTtsService.getTextAudio(
+        request.body.text, request.body.voice, request.body.rate, request.body.language ?? 'en',
+      );
       return reply
         .header('Cache-Control', 'private, max-age=86400')
         .type(audio.contentType)

@@ -258,11 +258,12 @@ export async function generateTtsAudio(
   voice: TtsVoice,
   rate: number,
   signal?: AbortSignal,
+  language?: 'en' | 'ja',
 ): Promise<Blob> {
   const response = await fetch('/api/tts', {
     method: 'POST',
     headers: { accept: 'audio/mpeg', 'content-type': 'application/json' },
-    body: JSON.stringify({ text, voice, rate }),
+    body: JSON.stringify({ text, voice, rate, ...(language ? { language } : {}) }),
     signal,
   });
   if (!response.ok) {
